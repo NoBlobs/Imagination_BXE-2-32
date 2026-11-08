@@ -27,6 +27,12 @@ void mmu_cache_op(const struct kccb_cmd *cmd)
 		inval |= 0x4;
 	if (f & MMUCACHE_TLB)
 		inval |= 0x8;
+	/*
+	 * The host rewrote page tables in DRAM: flush/invalidate the SLC first so
+	 * that the MMU does not walk stale lines (E015), then the MMU caches.
+	 */
+	if (inval || (f & MMUCACHE_PMTLB))
+		slc_flush_inval();
 	if (inval)
 		cr_write32(CR_BIF_CTRL_INVAL, inval);
 	if (f & MMUCACHE_PMTLB)

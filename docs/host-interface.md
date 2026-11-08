@@ -34,13 +34,17 @@ these bits change host behaviour:
 
 | Item | Value | Why |
 |---|---|---|
-| BRN 63553 | set | 36-bit MIPS bus workaround |
-| ERN 35421, 38748 | set | from Mesa `bxe-2-32.h` |
+| BRN | 63553 | 36-bit MIPS bus workaround |
+| ERN | 35421, 38748, 42290, 42606, 47025, 57596 | |
 | `SYS_BUS_SECURE_RESET` | set | **required**. Without it the host never clears `ROGUE_CR_SYS_BUS_SECURE` and the MIPS cannot fetch anything ([E001](logRefs/E001-sys-bus-secure-reset.md)). |
-| `SLC_SIZE_IN_KILOBYTES` | 0 (assumed) | 0 makes the host set `INICFG_DISABLE_DM_OVERLAP` |
-| `VIRTUAL_ADDRESS_SPACE_BITS` | 40 (assumed) | |
-| `NUM_ISP_IPP_PIPES` | 2 (assumed) | |
-| others | from Mesa `bxe-2-32.h` | `COMPUTE`, `COMPUTE_OVERLAP`, `GPU_MULTICORE_SUPPORT`, `MIPS`, `ROGUEXE`, `PBE2_IN_XE`, `PHYS_BUS_WIDTH 36`, `TILE 16×16`, `XPU_MAX_SLAVES 3`, … |
+| `SLC_SIZE_IN_KILOBYTES` | 16 | the host now leaves DM overlap enabled (config flags `0x0`) |
+| `LAYOUT_MARS` | 1 | host `pvr_fw_stop()` checks `MARS_IDLE` instead of SIDEKICK/SLC idle |
+| `XE_MEMORY_HIERARCHY`, `XE_TPU2` | set | host sizes the fragment context state differently and resets with `SOFT_RESET2` |
+| value features | `CDM_CONTROL_STREAM_FORMAT 1`, `COMMON_STORE 13312`, `FBCDC 50`, `FBCDC_ALGORITHM 50`, `FBCDC_ARCHITECTURE 7`, `NUM_OSIDS 8`, `NUM_ISP_IPP_PIPES 2`, `SLC_BANKS 1`, `VA bits 40`, `PHYS_BUS_WIDTH 36`, `XE_ARCHITECTURE 1`, `XPU_MAX_REGBANKS_ADDR_WIDTH 19`, `XPU_MAX_SLAVES 3`, `XPU_REGISTER_BROADCAST 1`, … | |
+| boolean features | `AXI_ACELITE`, `COMPUTE`, `COMPUTE_OVERLAP`, `COREID_PER_OS`, `GPU_MULTICORE_SUPPORT`, `GPU_VIRTUALISATION`, `GS_RTA_SUPPORT`, `IRQ_PER_OS`, `MIPS`, `PBE2_IN_XE`, `PBVNC_COREID_REG`, `PERFBUS`, `ROGUEXE`, `SIMPLE_INTERNAL_PARAMETER_FORMAT(_V2)`, `SLC_SIZE_CONFIGURABLE`, `SOC_TIMER` | |
+
+These are the values the spec documents for the open firmware image of this BVNC
+(`docsClean/memory-model.md`, the answer to Q2).
 
 ## 2. Start-up handshake
 
@@ -89,7 +93,7 @@ magic value `0x2ABCxxxx` in their type are traced as `MAIN_150` and still acknow
 |---|---|
 | `KICK` (101) | `sched_kick()`: see [scheduler-and-kicks.md](scheduler-and-kicks.md) |
 | `COMBINED_GEOM_FRAG_KICK` (117) | two `sched_kick()` calls |
-| `MMUCACHE` (102) | BIF invalidation, PM TLB, MIPS TLB flush, then the sync value is written |
+| `MMUCACHE` (102) | SLC flush and invalidate ([E015](logRefs/E015-slc-flush-before-mmu-inval.md)), BIF invalidation, PM TLB, MIPS TLB flush, then the sync value is written |
 | `CLEANUP` (106) | `sched_cleanup()` → 0 or `CLEANUP_BUSY` |
 | `POW` (107) | `power.c` |
 | `FORCE_UPDATE` (116) | marks the context's sync checkpoints as errored at the fence and re-runs the context |

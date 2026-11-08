@@ -19,8 +19,10 @@ this BVNC as experimental.
 | Runtime PM: idle → power off → warm boot | works |
 | Vulkan device enumeration (`vulkaninfo`) | works: `PowerVR B-Series BXE-2-32 MC1` |
 | Client CCB scheduling, fences and updates | implemented |
-| Compute kick | reaches the hardware but does not complete yet: the unit set-up is still incomplete |
-| Geometry, fragment and transfer kicks, fault recovery | not implemented |
+| GPU bring-up (exec bases, unit init, dust power) | works |
+| Compute jobs | **work**: `dEQP-VK.compute.pipeline.basic` passes 9 cases (SSBO copies, barriers, atomics) |
+| Transfer (TQ_3D) | programmed, but the 3D pipe does not start yet, so image cases fail |
+| Geometry and fragment kicks, fault recovery | not implemented |
 
 See [docs/status.md](docs/status.md) for details and the next steps.
 

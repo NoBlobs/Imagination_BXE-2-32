@@ -21,10 +21,10 @@ BVNC entry, and the Mesa `pvr` Vulkan driver.
 |---|---|
 | [status.md](status.md) | what works, what does not, the next steps |
 | [architecture.md](architecture.md) | source files, execution model (interrupt-driven), state, module map |
-| [boot-and-memory.md](boot-and-memory.md) | MIPS TLB and wrapper remap, memory map, layout table, boot sequence, TLB refill, exceptions, debug scratch registers |
+| [boot-and-memory.md](boot-and-memory.md) | MIPS TLB and wrapper remap, memory map, layout table, boot sequence, **GPU bring-up (`gpu_init.c`)**, TLB refill, exceptions, debug scratch registers |
 | [host-interface.md](host-interface.md) | `.fw` container and device info, start-up handshake, KCCB/FWCCB, host notification, power and warm boot, trace format |
-| [scheduler-and-kicks.md](scheduler-and-kicks.md) | data masters, context table, client CCB walk and UFOs, completion, cleanup, BIF slots, compute kick |
-| [registers.md](registers.md) | every register used, with provenance; boot values; writable-bit map; exec-base candidates |
+| [scheduler-and-kicks.md](scheduler-and-kicks.md) | data masters, context table, client CCB walk and UFOs, completion, cleanup, BIF slots, compute kick, experimental TQ_3D kick, MMU faults |
+| [registers.md](registers.md) | every register used, with provenance; GPU bring-up registers; boot values; writable-bit map |
 | [toolchain.md](toolchain.md) | build, flags, LLVM microMIPS workarounds, experiment knobs |
 | [board-and-kernel.md](board-and-kernel.md) | board facts, kernel branch `IMG-BXE-2-32`, GRUB entry, scripts, safety rules |
 | [questions.md](questions.md) | questions for the spec maintainer (dirty team), with what experiments answered |

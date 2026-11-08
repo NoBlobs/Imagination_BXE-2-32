@@ -129,8 +129,15 @@ void sched_run(void);
 void sched_irq(uint32_t events);
 void sched_force_update(fwaddr_t ctx, uint32_t fence_offset);
 
+/* GPU bring-up (gpu_init.c) */
+void gpu_power_on(void);
+void gpu_units_init(void);
+bool gpu_units_ready(void);
+bool dust_power(bool on);
+
 /* mmu */
 void mmu_cache_op(const struct kccb_cmd *cmd);
+void slc_flush_inval(void);
 void tlb_flush_dynamic(void);
 
 /* entry points */

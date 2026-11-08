@@ -8,10 +8,10 @@
 | DM | id | Work | cCCB task types | State |
 |---|---|---|---|---|
 | GP | 0 | firmware internal | – | – |
-| TDM | 1 | transfer | `TQ_TDM` (206), `TQ_2D` (208) | retired at once (`MAIN_172`) |
+| TDM | 1 | transfer | `TQ_TDM` (206), `TQ_2D` (208) | retired at once (`MAIN_172`); not seen from Mesa on this GPU |
 | GEOM | 2 | geometry / TA | `GEOM` (201) | retired at once |
-| FRAG | 3 | fragment / 3D | `FRAG` (203), `FRAG_PR` (204), `TQ_3D` (202) | retired at once |
-| CDM | 4 | compute | `CDM` (205) | **kicked on hardware**. It faults until the exec bases are known (Q7). |
+| FRAG | 3 | fragment / 3D | `FRAG` (203), `FRAG_PR` (204), `TQ_3D` (202) | retired at once. `TQ_3D` is programmed with `-DEXP_TQ3D`, but the 3D pipe does not start ([E014](logRefs/E014-tq3d-kick-does-not-start.md)). |
+| CDM | 4 | compute | `CDM` (205) | **works**: `dEQP-VK.compute.pipeline.basic`, 9 pass ([E013](logRefs/E013-gpu-units-init-compute-pass.md)) |
 
 A task that is not implemented is **retired immediately**: its updates still run and
 the host's fences signal. The host therefore never hangs, but the work is not done.
@@ -138,17 +138,42 @@ broadcast bank at `0xCFA00000`.
 Completion is `EVENT_STATUS` bit 2 (`COMPUTE_FINISHED`).
 
 The remaining `rogue_fwif_compute_regs` fields (`tpu`, `cdm_item`, `compute_cluster`,
-`tpu_tag_cdm_ctrl`, `cdm_resume_pds1`) are **not written yet**: their offsets are
-open question Q7.
+`tpu_tag_cdm_ctrl`) are **not written**. Their gating feature or BRN is absent on this
+GPU, so the host leaves them unused (`docsClean/kick-compute-and-3d.md`, answer to Q7).
 
-### Why compute does not work yet
+### What made compute work
 
-The PDS addresses in `CDM_CONTEXT_PDS0`/`TERMINATE_PDS` are **offsets inside the PDS
-code/data heap**, not full virtual addresses. The hardware adds a global *PDS
-execution base*. The upstream header `pvr_rogue_heap_config.h` states that the heap
-bases "will be programmed, on a global basis, into `ROGUE_CR_PDS_EXEC_BASE` and
-`ROGUE_CR_USC_CODE_BASE_*`", but no public source gives those registers' offsets.
-With the base left at 0, the CDM fetches from VA `0x26C0`, which lies in the reserved
-first 4 MiB and is unmapped, and takes an MMU fault
-([E006](logRefs/E006-compute-kick-mmu-fault.md)). The experiments that look for the
-registers are [E007](logRefs/E007-register-survey.md)–[E009](logRefs/E009-pds-exec-base-0x0610.md).
+1. The PDS and USC execution bases and the rest of the GPU units init
+   (see [boot-and-memory.md](boot-and-memory.md#gpu-bring-up-gpu_initc)). Without the
+   PDS base the CDM faulted at `0x26C0` ([E006](logRefs/E006-compute-kick-mmu-fault.md)).
+   Without the USC bases it stayed active forever
+   ([E012](logRefs/E012-usc-base-0x0fc8.md)).
+2. SLC flush and invalidate before MMU invalidation and before binding a new page
+   catalogue. Without it the first job of a new memory context could fault on its
+   USC code ([E015](logRefs/E015-slc-flush-before-mmu-inval.md)).
+
+## Transfer kick TQ_3D (experimental, `-DEXP_TQ3D`)
+
+`kick_tq3d()` follows the transfer table of `kick-compute-and-3d.md`. The spec's `cmd+N`
+offsets are relative to the cCCB header, so `cmd+0x30` = `regs+0`. The full field map
+and the result are in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
+
+1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101`, bind the BIF slot for DM 3
+   (`CAT_BASE_INDEX` bits 10:8), and program the transfer, ISP and PBE registers.
+2. Write `ISP_RENDER = regs.isp_render`, then the start, RMW `| 0x10`.
+3. Completion is expected on `PIXELBE_END_RENDER`; the finish trace is `MAIN_4` "3D
+   Transfer finished".
+
+The 3D pipe does not start (`PERF_3D_CYCLE` stays 0). This is question Q8. Without
+the knob, `TQ_3D` tasks are retired at once.
+
+## MMU faults
+
+When `EVENT_STATUS.MMU_PAGE_FAULT` is seen, by the IRQ task or by the poll,
+`kick_events()` calls `mmu_fault()`, which does the following:
+1. Emits `HWR_80` "BIF0 page fault detected (… MMU Status … Req Status …)".
+2. Clears the event and sets `HWR_GENERAL_LOCKUP` in `sysdata.hwr_state_flags`.
+3. Retires every busy DM, so the host gets its fences.
+
+There is no hardware reset yet (Q11), so the faulting unit may stay busy until the next
+power cycle.

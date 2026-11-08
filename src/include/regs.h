@@ -66,3 +66,8 @@
 #define CR_DBG_EXC_BADVA        0x1A28
 #define CR_DBG_UNITS_PDS        0x1A30
 #define CR_DBG_UNITS_USC        0x1A38
+#define CR_DBG_IRQ_TIMER        0x1A40  /* HW0 count */
+#define CR_DBG_IRQ_BG           0x1A48  /* HW1 (MTS BG task) count */
+#define CR_DBG_IRQ_IRQ          0x1A50  /* HW2 (MTS IRQ task) count */
+#define CR_DBG_IRQ_LASTEV       0x1A58  /* EVENT_STATUS seen by the last IRQ task */
+#define CR_DBG_EVENTS_SEEN      0x1A60  /* OR of every event handled by kick_events */

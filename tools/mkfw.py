@@ -57,39 +57,60 @@ SLC_CACHE_LINE_SIZE_BITS SLC_SIZE_IN_KILOBYTES TILE_SIZE_X TILE_SIZE_Y
 USC_MIN_OUTPUT_REGISTERS_PER_PIX VIRTUAL_ADDRESS_SPACE_BITS XE_ARCHITECTURE
 XPU_MAX_REGBANKS_ADDR_WIDTH XPU_MAX_SLAVES XPU_REGISTER_BROADCAST""".split())
 
-# BXE-2-32 description.  Sources: Mesa device_info/bxe-2-32.h (public) for
-# the user-visible features; the clean spec for the MIPS core and the 36-bit
-# bus.  Values marked "assumed" are open questions to the spec maintainer
-# (docs/questions.md).
-DEV_QUIRKS = [63553]                 # 36-bit MIPS bus workaround
-DEV_ERNS = [35421, 38748]            # Mesa
+# BXE-2-32 description, from docsClean/memory-model.md ("Device information
+# block"): the values carried by the redistributable open firmware image for
+# this BVNC, as documented by the spec maintainer (answers question Q2).
+DEV_QUIRKS = [63553]
+DEV_ERNS = [35421, 38748, 42290, 42606, 47025, 57596]
 DEV_FEATURES = {
-    "COMMON_STORE_SIZE_IN_DWORDS": 832 * 4 * 4,
-    "COMPUTE": True,
-    "COMPUTE_OVERLAP": True,
+    # value features
+    "CDM_CONTROL_STREAM_FORMAT": 1,
+    "COMMON_STORE_SIZE_IN_DWORDS": 13312,
+    "FBCDC": 50,
     "FBCDC_ALGORITHM": 50,
-    "GPU_MULTICORE_SUPPORT": True,
+    "FBCDC_ARCHITECTURE": 7,
     "ISP_MAX_TILES_IN_FLIGHT": 2,
     "ISP_SAMPLES_PER_PIXEL": 1,
+    "LAYOUT_MARS": 1,
     "MAX_PARTITIONS": 8,
-    "MIPS": True,
     "NUM_CLUSTERS": 1,
-    "NUM_ISP_IPP_PIPES": 2,          # assumed
+    "NUM_ISP_IPP_PIPES": 2,
+    "NUM_OSIDS": 8,
     "NUM_RASTER_PIPES": 1,
-    "PBE2_IN_XE": True,
     "PHYS_BUS_WIDTH": 36,
-    "ROGUEXE": True,
-    "SIMPLE_INTERNAL_PARAMETER_FORMAT": True,
-    "SIMPLE_INTERNAL_PARAMETER_FORMAT_V2": True,
     "SIMPLE_PARAMETER_FORMAT_VERSION": 2,
+    "SLC_BANKS": 1,
     "SLC_CACHE_LINE_SIZE_BITS": 512,
-    "SLC_SIZE_IN_KILOBYTES": 0,      # assumed (0 => host disables DM overlap)
-    "SYS_BUS_SECURE_RESET": True,    # assumed: MIPS accesses blocked otherwise
+    "SLC_SIZE_IN_KILOBYTES": 16,
     "TILE_SIZE_X": 16,
     "TILE_SIZE_Y": 16,
     "USC_MIN_OUTPUT_REGISTERS_PER_PIX": 2,
-    "VIRTUAL_ADDRESS_SPACE_BITS": 40,  # assumed (Rogue standard)
+    "VIRTUAL_ADDRESS_SPACE_BITS": 40,
+    "XE_ARCHITECTURE": 1,
+    "XPU_MAX_REGBANKS_ADDR_WIDTH": 19,
     "XPU_MAX_SLAVES": 3,
+    "XPU_REGISTER_BROADCAST": 1,
+    # boolean features
+    "AXI_ACELITE": True,
+    "COMPUTE": True,
+    "COMPUTE_OVERLAP": True,
+    "COREID_PER_OS": True,
+    "GPU_MULTICORE_SUPPORT": True,
+    "GPU_VIRTUALISATION": True,
+    "GS_RTA_SUPPORT": True,
+    "IRQ_PER_OS": True,
+    "MIPS": True,
+    "PBE2_IN_XE": True,
+    "PBVNC_COREID_REG": True,
+    "PERFBUS": True,
+    "ROGUEXE": True,
+    "SIMPLE_INTERNAL_PARAMETER_FORMAT": True,
+    "SIMPLE_INTERNAL_PARAMETER_FORMAT_V2": True,
+    "SLC_SIZE_CONFIGURABLE": True,
+    "SOC_TIMER": True,
+    "SYS_BUS_SECURE_RESET": True,    # required: E001
+    "XE_MEMORY_HIERARCHY": True,
+    "XE_TPU2": True,
 }
 
 

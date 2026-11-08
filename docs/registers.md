@@ -28,14 +28,16 @@ The firmware reaches registers in three ways:
 | `0x0480` | CDM control stream base | S | compute kick |
 | `0x0498` | CDM context state base | S | compute kick |
 | `0x04A8`/`B0`/`B8`/`C0` | `CDM_CONTEXT_PDS0/1`, `CDM_TERMINATE_PDS/1` | P | compute kick |
-| `0x0610` | **`PDS_EXEC_BASE`** (named in `pvr_rogue_heap_config.h`; offset found here) | E | `= sysinit.pds_exec_base`, bits 39:20 ([E008](logRefs/E008-writable-mask-probe.md), [E009](logRefs/E009-pds-exec-base-0x0610.md)); `EXP_PDS_REG` for now |
-| `0x0FC8` | `USC_CODE_BASE_*` candidate | E | bits 39:34 writable; to be tested (E012) |
+| `0x0610` | **`PDS_EXEC_BASE`** (named in `pvr_rogue_heap_config.h`) | E, S | `= sysinit.pds_exec_base`, bits 39:20. Found by the probe ([E009](logRefs/E009-pds-exec-base-0x0610.md)), confirmed by the spec. |
+| `0x4008`/`0x4010`/`0x4028` | **USC exec base ×3** | S | `= sysinit.usc_exec_base` ([E013](logRefs/E013-gpu-units-init-compute-pass.md)) |
+| `0x0FC8` | ISP register (fragment kick) | S, E | bits 39:34 writable. **Not** the USC base ([E012](logRefs/E012-usc-base-0x0fc8.md)). TQ writes 0, 3D writes 0. |
+| `0x06A0`/`A8`/`B0`/`B8` | `PDS_BGRND0/1/2_BASE`, `PDS_BGRND3_SIZEINFO` | S, E | TQ/3D PDS background programs; layouts match public Mesa and the probe masks ([E014](logRefs/E014-tq3d-kick-does-not-start.md)) |
 | `0x0878` | `MIPS_ADDR_REMAP_RANGE_CONFIG` | P | MIPS remap entries (boot, refill, flush) |
 | `0x08A0` | `MIPS_WRAPPER_IRQ_ENABLE` | P | = 1 at init |
 | `0x08A8` | `MIPS_WRAPPER_IRQ_STATUS` | P | = 1 interrupts the host |
 | `0x0B08` | MTS task end | S | 0 after the BG task, 2 after the IRQ task |
-| `0x0B30`/`0x0B40` | `MTS_BGCTX/INTCTX_THREAD0_DM_ASSOC` | P | = `0xFFFF` (Q1) |
-| `0x0BC8` | `MTS_SCHEDULE_ENABLE` | P | = `0xFF` (Q1) |
+| `0x0B30`/`0x0B40` | `MTS_BGCTX/INTCTX_THREAD0_DM_ASSOC` | P | BG = `1` (DM0), INT = `0xFFFF` |
+| `0x0B58 + 8n` | `MTS_DMn_INTERRUPT_ENABLE` | P, S | DM0 `0x89200`, DM2 `0xA0`, DM3 `0x08`, DM4 `0x04` (see [E016](logRefs/E016-completion-path-counters.md)) |
 | `0x1200 + 8n` | `BIF_CAT_BASEn` | P | page catalogue of BIF slot n |
 | `0x1240` | `BIF_CAT_BASE_INDEX` | P | DM → slot (TA bit 0, 3D bit 8, CDM bit 16, TDM bit 19) |
 | `0x12A0` | `BIF_CTRL_INVAL` | P | MMU cache invalidation (PT/PD/PC/TLB) |
@@ -46,6 +48,22 @@ The firmware reaches registers in three ways:
 | `0x3818`/`0x3820` | `SLC_CTRL_FLUSH_INVAL`/`SLC_STATUS0` | P | SLC flush after each DM completion |
 | `0xF308` | multicore system | S | read before a compute kick |
 | `0xF330` | multicore compute control | S | `execute_count << 8 \| 1` (broadcast) |
+
+## GPU bring-up registers (spec, `boot-gpu-init.md`)
+
+| Offset | Src | Value written by `gpu_init.c` |
+|---|---|---|
+| `0x0038` | S | power-island request: `1`, then `3`; poll `POWER_COMPLETE` |
+| `0x0050` | S | active dusts `(1 << n) − 1` |
+| `0x0890` `XPU_BROADCAST` | P | `1` |
+| `0xA100` `SYS_BUS_SECURE` | P | `0` |
+| `0x13E0` `BIF_FAULT_READ` | P | `sysinit.fault_phys_addr` |
+| `0x3828` `SLC_CTRL_BYPASS` | P | `\|= 0x01000000`, high `\|= 0x2000` (16 KiB SLC) |
+| `0x6000` | S | reset pulse `1` → `0` |
+| `0x0600..0x0720`, `0x18C0..0x1900`, `0x1498`, `0x0358`, `0x20F8`, `0x2010`, `0x2100`, `0x13F8`, `0x4050`, `0x06D8` | S | unit defaults (table in the spec) |
+| `0x4068`, `0x0CD8` | S | write `1`, poll bit 0 → 0 (init done) |
+| `0x0660`, `0x0670` | S | `1` |
+| `0x17B8` | S | `sysinit.filter_flags` |
 
 ## Values the host leaves after boot
 

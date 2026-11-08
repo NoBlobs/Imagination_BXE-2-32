@@ -28,12 +28,13 @@ The client CCB walk and the data-master kicks are in
 |---|---|---|
 | `src/boot.S` | ~260 | Reset/NMI entry at `0xBFC00000`. Sets up CP0, the TLB with wired entries and the wrapper remap entries, then uses ERET to reach `fw_entry`. |
 | `src/vectors.S` | ~390 | Exception page at `0x9FC02000`: TLB refill, the general exception handler, the vectored interrupt entries, `tlb_flush_dynamic`, and `fw_entry` (clears .bss, calls C). |
-| `src/main.c` | ~210 | `fw_main`: shared-structure lookup, trace, MTS set-up, GPU unit init, the `firmware_started` handshake, then `irq_dispatch`. |
+| `src/main.c` | ~190 | `fw_main`: shared-structure lookup, trace, GPU bring-up, the `firmware_started` handshake, then `irq_dispatch`. |
+| `src/gpu_init.c` | ~190 | GPU bring-up at every power-on (`docsClean/boot-gpu-init.md`): XPU/secure/fault page, MTS event routing and context association, dust power request, SLC bypass, PDS/USC exec bases, unit defaults, init-done handshakes. |
 | `src/kccb.c` | ~150 | Kernel CCB consumer, return slots, Firmware CCB producer. |
 | `src/power.c` | ~85 | `KCCB_POW` handling and the power-sync word. |
 | `src/mmu.c` | ~45 | `KCCB_MMUCACHE`: BIF invalidation, PM TLB and the MIPS dynamic TLB. |
 | `src/sched.c` | ~420 | Context table, client CCB walk (fences, updates, tasks), retirement, cleanup, power state. |
-| `src/kick.c` | ~210 | BIF catalogue slots, the compute (CDM) kick, completion events, SLC flush. |
+| `src/kick.c` | ~330 | BIF catalogue slots, the compute (CDM) kick, the experimental TQ_3D kick, completion events, MMU fault report, SLC flush. |
 | `src/util.c` | ~190 | memset and memcpy, 64-bit division, GPU timer, delays and polls, write barrier, host notification, trace writer. |
 | `src/include/fwif.h` | ~450 | Firmware interface structures, checked with `static_assert` against the offsets in the public `pvr_rogue_fwif_check.h`. |
 | `src/include/layout.h` | ~60 | Every fixed address and size. It is parsed by `tools/mkfw.py` too. |
@@ -68,7 +69,9 @@ interrupt at a time:
 - **Timer (HW0)**: the CP0 Count/Compare timer, every 1 ms. It is a *backstop*. It
   polls the KCCB and the completion events, so the firmware keeps working even if the
   MTS does not deliver a task (the MTS set-up is open question Q1). In practice the
-  host sees the firmware answer within one tick.
+  host sees the firmware answer within one tick. [E016](logRefs/E016-completion-path-counters.md)
+  showed that the BG task arrives for every KCCB batch, but `COMPUTE_FINISHED` has not
+  raised the IRQ task yet. Compute completions are currently found by this poll.
 
 All three sources share one entry, `int_common` in `vectors.S`. It saves the
 caller-saved registers, EPC and Status on the wired stack. It then **clears
@@ -108,9 +111,9 @@ refill handler maps that address on demand from the host's MIPS page table.
 ## Module dependencies
 
 ```
- fw_main ─▶ shared_init ─▶ trace_init ─▶ mts_init ─▶ gpu_units_init ─▶ sched_init ─▶ kick_init
+ fw_main ─▶ shared_init ─▶ trace_init ─▶ gpu_power_on ─▶ gpu_units_init (dust_power) ─▶ sched_init ─▶ kick_init
  irq_dispatch ─▶ kccb_process ─▶ {sched_kick, sched_cleanup, mmu_cache_op, pow_handle, ...}
               └▶ sched_poll / sched_irq ─▶ kick_events ─▶ sched_dm_done
-              └▶ sched_run ─▶ ctx_process ─▶ kick_task ─▶ kick_cdm
+              └▶ sched_run ─▶ ctx_process ─▶ kick_task ─▶ kick_cdm / kick_tq3d (EXP_TQ3D)
  everything ─▶ util (TRACE, notify_host, write_barrier, cr_poll32, gpu_timer)
 ```

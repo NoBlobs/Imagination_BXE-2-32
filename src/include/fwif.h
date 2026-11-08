@@ -448,3 +448,44 @@ struct cmd_compute {                     /* rogue_fwif_cmd_compute, 0x60 bytes *
 };
 static_assert(offsetof(struct cmd_compute, flags) == 80);
 static_assert(sizeof(struct cmd_compute) == 0x60);
+
+/* rogue_fwif_transfer_regs / rogue_fwif_cmd_transfer (TQ_3D payload, 192 bytes) */
+struct transfer_regs {
+	uint32_t isp_bgobjvals;
+	uint32_t usc_pixel_output_ctrl;
+	uint32_t usc_clear_register[4];
+	uint32_t isp_mtile_size;
+	uint32_t isp_render_origin;
+	uint32_t isp_ctl;
+	uint32_t isp_xtp_pipe_enable;
+	uint32_t isp_aa;
+	uint32_t event_pixel_pds_info;
+	uint32_t event_pixel_pds_code;
+	uint32_t event_pixel_pds_data;
+	uint32_t isp_render;
+	uint32_t isp_rgn;
+	uint32_t frag_screen;
+	uint32_t pad;
+	uint64_t pds_bgnd0_base;
+	uint64_t pds_bgnd1_base;
+	uint64_t pds_bgnd3_sizeinfo;
+	uint64_t isp_mtile_base;
+	uint64_t pbe_wordx_mrty[9];
+};
+static_assert(offsetof(struct transfer_regs, isp_render) == 56);
+static_assert(offsetof(struct transfer_regs, frag_screen) == 64);
+static_assert(offsetof(struct transfer_regs, pds_bgnd0_base) == 72);
+static_assert(offsetof(struct transfer_regs, isp_mtile_base) == 96);
+static_assert(offsetof(struct transfer_regs, pbe_wordx_mrty) == 104);
+static_assert(sizeof(struct transfer_regs) == 176);
+
+struct cmd_transfer {
+	uint32_t frame_num;
+	uint32_t pad0;
+	struct transfer_regs regs;
+	uint32_t flags;
+	uint32_t pad1;
+};
+static_assert(offsetof(struct cmd_transfer, regs) == 8);
+static_assert(offsetof(struct cmd_transfer, flags) == 184);
+static_assert(sizeof(struct cmd_transfer) == 192);

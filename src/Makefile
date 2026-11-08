@@ -3,7 +3,7 @@
 #
 # Build the BXE-2-32 (36.29.52.182) firmware: microMIPS32r2, o32, soft-float.
 #   make            -> ../build/rogue_36.29.52.182_v1.fw
-#   make EXP="-DEXP_PDS_REG=0x610"   (experiment knobs, see main.c; rebuild with -B)
+#   make EXP="-DNAME=value"           (extra defines for experiments; rebuild with -B)
 #   make SFH=<path to pvr_rogue_fwif_sf.h> sfid   (regenerate include/sfid.h)
 
 BUILD   ?= ../build
@@ -18,7 +18,7 @@ CFLAGS  := $(TARGET) -std=c23 -O2 -g -ffreestanding -fno-builtin -fno-pic -mno-a
            -Wno-unused-parameter -Iinclude $(EXP)
 ASFLAGS := $(TARGET) -fno-pic -mno-abicalls -G0 -Iinclude -D__ASSEMBLER__
 
-SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c
+SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c gpu_init.c
 SRCS_S  := boot.S vectors.S
 OBJS    := $(addprefix $(BUILD)/obj/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 

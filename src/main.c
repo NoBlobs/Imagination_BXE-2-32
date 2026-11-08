@@ -37,47 +37,6 @@ static void clocks_update(uint32_t hz)
 		g.count_per_ms = 1;
 }
 
-static void mts_init(void)
-{
-	/*
-	 * Route every DM's background and interrupt tasks to thread 0 and
-	 * enable scheduling for all DMs.
-	 */
-	cr_write32(CR_MTS_BGCTX_THREAD0_DM_ASSOC, 0xFFFF);
-	cr_write32(CR_MTS_INTCTX_THREAD0_DM_ASSOC, 0xFFFF);
-	cr_write32(CR_MTS_SCHEDULE_ENABLE, 0xFF);
-}
-
-/*
- * Experimental knobs (make EXP_PDS_REG=0x610 ...): offset of the register
- * that receives sysinit.pds_exec_base / usc_exec_base.  0 = not written.
- */
-#ifndef EXP_PDS_REG
-#define EXP_PDS_REG 0
-#endif
-#ifndef EXP_USC_REG
-#define EXP_USC_REG 0
-#endif
-/* Value for ROGUE_CR_EVENT_ENABLE (0x0128, writable mask 0x0008FFFE, E011); 0 = untouched. */
-#ifndef EXP_EVENT_ENABLE
-#define EXP_EVENT_ENABLE 0
-#endif
-
-static void gpu_units_init(void)
-{
-	struct sysinit *si = g.sysinit;
-
-	if (EXP_PDS_REG)
-		cr_write64(EXP_PDS_REG, si->pds_exec_base);
-	if (EXP_USC_REG)
-		cr_write64(EXP_USC_REG, si->usc_exec_base);
-	if (EXP_EVENT_ENABLE)
-		cr_write32(CR_EVENT_ENABLE, EXP_EVENT_ENABLE);
-	/* read-back for the host-side sampler */
-	cr_write32(CR_DBG_UNITS_PDS, EXP_PDS_REG ? cr_read32(EXP_PDS_REG + 4) : 0xFFFFFFFFu);
-	cr_write32(CR_DBG_UNITS_USC, EXP_USC_REG ? cr_read32(EXP_USC_REG + 4) : 0xFFFFFFFFu);
-}
-
 static void shared_init(void)
 {
 	struct sysinit *si = (struct sysinit *)FW_SYSINIT_VA;
@@ -122,7 +81,7 @@ void fw_main(void)
 	TRACE(SFID_DBG_4, cr_read32(CR_MTS_SCHEDULE_ENABLE),
 	      cr_read32(CR_MTS_BGCTX_THREAD0_DM_ASSOC),
 	      cr_read32(CR_MTS_INTCTX_THREAD0_DM_ASSOC));
-	mts_init();
+	gpu_power_on();
 	gpu_units_init();
 	sched_init();
 
@@ -168,6 +127,7 @@ void irq_dispatch(uint32_t source)
 	switch (source) {
 	case 0: /* timer */
 		g.timer_irqs++;
+		cr_write32(CR_DBG_IRQ_TIMER, g.timer_irqs);
 		timer_arm();
 		if (!g.powered_off) {
 			kccb_process();
@@ -177,6 +137,7 @@ void irq_dispatch(uint32_t source)
 		break;
 	case 1: /* MTS background task */
 		g.bg_irqs++;
+		cr_write32(CR_DBG_IRQ_BG, g.bg_irqs);
 		if (!g.powered_off) {
 			kccb_process();
 			sched_poll();
@@ -188,6 +149,8 @@ void irq_dispatch(uint32_t source)
 		uint32_t ev = cr_read32(CR_EVENT_STATUS);
 
 		g.irq_irqs++;
+		cr_write32(CR_DBG_IRQ_IRQ, g.irq_irqs);
+		cr_write32(CR_DBG_IRQ_LASTEV, ev);
 		if (ev)
 			cr_write32(CR_EVENT_CLEAR, ev);
 		if (!g.powered_off)

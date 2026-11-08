@@ -143,7 +143,6 @@ refill_main:
 	ori	$13, $13, REMAP_ENABLE
 	sw	$13, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	sw	$12, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
-	sw	$13, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 
 	/* odd page */
 	andi	$12, $11, 2
@@ -164,8 +163,7 @@ refill_main:
 	ori	$13, $13, REMAP_ENABLE
 	sw	$13, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	sw	$12, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
-	sw	$13, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
-	lw	$12, CR_CORE_REVISION($1)	/* drain register writes */
+	lw	$12, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)	/* flush posted writes */
 
 	/* identity TLB entry, uncached, dirty, valid, global */
 	srl	$12, $26, 12
@@ -340,16 +338,14 @@ tlb_flush_dynamic:
 	sll	$11, $10, REMAP_ENTRY_SHIFT
 	sw	$11, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	sw	$0, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
-	sw	$11, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	addiu	$11, $10, 16
 	sll	$11, $11, REMAP_ENTRY_SHIFT
 	sw	$11, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	sw	$0, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
-	sw	$11, CR_MIPS_ADDR_REMAP_RANGE_CONFIG($1)
 	addiu	$10, $10, 1
 	bne	$10, $9, 1b
 	nop
-	lw	$11, CR_CORE_REVISION($1)
+	lw	$11, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
 	MTC0	13, 10, 0
 	lui	$11, 0xBFC0
 	ori	$11, $11, 0x1000

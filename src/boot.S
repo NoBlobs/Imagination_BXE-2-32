@@ -20,14 +20,15 @@
 	.set	noreorder
 	.set	noat
 
-/* Program wrapper remap entry: \entry (reg), base_in VA \va (reg), out word \hi (reg) */
+/* Program wrapper remap entry: \entry (reg), base_in VA \va (reg), out word \hi (reg).
+ * Order (docsClean/memory-model.md): low word, high word, read back the high word. */
 	.macro	REMAP entry, va, hi, tmp, regs
 	sll	\tmp, \entry, REMAP_ENTRY_SHIFT
 	or	\tmp, \tmp, \va
 	ori	\tmp, \tmp, REMAP_ENABLE
 	sw	\tmp, CR_MIPS_ADDR_REMAP_RANGE_CONFIG(\regs)
 	sw	\hi, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)(\regs)
-	sw	\tmp, CR_MIPS_ADDR_REMAP_RANGE_CONFIG(\regs)
+	lw	\tmp, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)(\regs)	/* flush posted writes */
 	.endm
 
 /* hi word of a remap entry from a 64-bit physical address held in (\lo32, \hi32) */

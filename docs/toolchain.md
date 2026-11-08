@@ -15,7 +15,7 @@
 
 ```bash
 make -C src                                  # build/rogue_36.29.52.182_v1.fw
-make -C src -B EXP="-DEXP_PDS_REG=0x610"     # experiment knobs (see below)
+make -C src -B EXP="-DEXP_TQ3D"             # experiment knobs (see below)
 make -C src sfid SFH=<path>/pvr_rogue_fwif_sf.h   # regenerate include/sfid.h
 make -C src clean
 ```
@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `778edf7b…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `cc8fc482…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -76,15 +76,14 @@ warning lines while every other diagnostic is still printed.
 
 ## Experiment knobs
 
-`main.c` has compile-time knobs, which are 0 (off) by default:
+Compile-time knobs, off by default (`make -B EXP="-DEXP_TQ3D"`):
 
 | Knob | Effect |
 |---|---|
-| `EXP_PDS_REG=<off>` | `gpu_units_init()` writes `sysinit.pds_exec_base` (64-bit) to that register at every boot |
-| `EXP_USC_REG=<off>` | same for `sysinit.usc_exec_base` |
-| `EXP_EVENT_ENABLE=<mask>` | writes `ROGUE_CR_EVENT_ENABLE` (`0x0128`). **It routes events to the host IRQ**, see E011. Use only for experiments. |
+| `EXP_TQ3D` | compile the experimental TQ_3D kick (E014). Without it, `TQ_3D` tasks are retired at once. |
 
-The read-back of the high word goes to the scratch registers `0x1A30` and `0x1A38`.
+The exec-base and event-enable knobs of E009–E012 were removed once the spec gave the
+registers (`gpu_init.c`).
 Rebuild with `-B` when you change `EXP`, because make does not track it.
 
 ## Trace IDs

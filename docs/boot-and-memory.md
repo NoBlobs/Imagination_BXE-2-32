@@ -21,7 +21,8 @@ A remap entry is written as two 32-bit halves:
 ```
 low  = page_va | (entry << 1) | 1            (bit 0 = enable; bits 12+ = input page)
 high = (bus_pa >> 12) << 4                   (36-bit PA, 4 KiB page number at bit 4)
-write order: low, high, low                  (open question Q3; this order works)
+write order: low word, high word, then read back the high word to flush the posted
+             writes (docsClean/memory-model.md, answer to Q3)
 ```
 
 To disable an entry, write it with the enable bit clear and high = 0.
@@ -109,7 +110,53 @@ warm, takes this path:
 
 `fw_entry` (`.text`, mapped through the refill handler) clears `.bss` and calls
 `fw_main()`. That function writes markers 4, 5 and 6, and sets `firmware_started` just
-before marker 6.
+before marker 6. Between markers 5 and 6 it runs the GPU bring-up, see
+[GPU bring-up](#gpu-bring-up-gpu_initc) below.
+
+## GPU bring-up (`gpu_init.c`)
+
+This runs at every power-on of the GPU domain, cold or warm, after the shared
+structures are found and before `firmware_started`. It follows
+`docsClean/boot-gpu-init.md`. `BCAST[x]` is a write through the broadcast bank.
+
+**`gpu_power_on()`** (spec sections B and C)
+
+| Write | Value |
+|---|---|
+| `XPU_BROADCAST` (`0x0890`) | `1` (the only core) |
+| `SYS_BUS_SECURE` (`0xA100`) | `0`, then read back |
+| `BIF_FAULT_READ` (`0x13E0`) | `sysinit.fault_phys_addr`: faulting units read the dummy page |
+| `EVENT_CLEAR` | `0x41FC` |
+| `EVENT_ENABLE` (`0x0128`) | `0`: routes to the host IRQ ([E011](logRefs/E011-event-enable-0x0128.md)) |
+| `MTS_DM0/2/3/4_INTERRUPT_ENABLE` | `0x89200` / `0xA0` / `0x08` / `0x04` |
+| `MTS_INTCTX_THREAD0_DM_ASSOC` / `MTS_BGCTX_…` | `0xFFFF` / `1` |
+
+`MTS_SCHEDULE_ENABLE` is not touched; the spec says it is not needed.
+
+**`gpu_units_init()`** (spec section A)
+
+1. Clock gating: nothing to do. The host leaves every unit in AUTO, and the mainline
+   host never sets `INICFG_DISABLE_CLKGATING`.
+2. Dust power, `dust_power(true)`:
+   - `BCAST[0x0050] = (1 << n) − 1`, where `n = runtime_cfg.default_dusts_num_init` (1);
+   - `XPU_BROADCAST = 1`;
+   - `CR[0x0038] = 1`, then `= 3`;
+   - poll `EVENT_STATUS.POWER_COMPLETE`; `POWER_ABORT` counts as a failure;
+   - trace `POW_7`.
+3. SLC bypass for the 16 KiB SLC: `SLC_CTRL_BYPASS |= 0x01000000`, high word `|= 0x2000`.
+4. Reset pulse: `BCAST[0x6000] = 1`, then `0`.
+5. Exec bases:
+   - `BCAST[0x0610]` = `pds_exec_base`;
+   - `BCAST[0x4008]`, `[0x4010]`, `[0x4028]` = `usc_exec_base`.
+6. Unit defaults: the table in the spec, from `0x18C0..0x1900` through `0x13F8`.
+   `0x4050 = 0x2000` and `0x06D8 = 0`, because there is no breakpoint over-allocation.
+7. Handshakes:
+   - `BCAST[0x4068] = 1`, then poll bit 0 until it reads 0;
+   - `BCAST[0x0660] = 1` and `[0x0670] = 1`;
+   - `BCAST[0x0CD8] = 1`, then poll bit 0 until it reads 0.
+8. `BCAST[0x17B8] = sysinit.filter_flags`.
+9. Single core, so the per-core index registers are left alone. Trace `MAIN_69 "GPU Units
+   init (# mask: …)"`, with the dust mask, or 0 if a step failed.
 
 ## TLB refill (`vectors.S`, `+0x000` → `refill_main` at `+0xA00`)
 
@@ -167,5 +214,8 @@ read at any time while the GPU is powered.
 | `0x1A08` | `CR_DBG_REFILLS` | refill handler (count) |
 | `0x1A10` | `CR_DBG_LASTVA` | refill handler (last missed VA) |
 | `0x1A18`/`20`/`28` | `CR_DBG_EXC_*` | general exception: Cause, EPC, BadVAddr |
-| `0x1A30`/`38` | `CR_DBG_UNITS_PDS`/`USC` | read-back of the exec-base experiment ([E009](logRefs/E009-pds-exec-base-0x0610.md)) |
+| `0x1A30`/`38` | `CR_DBG_UNITS_PDS`/`USC` | read-back of the high words of the PDS and USC exec bases after `gpu_units_init` |
+| `0x1A40`/`48`/`50` | `CR_DBG_IRQ_TIMER`/`BG`/`IRQ` | count of HW0/HW1/HW2 interrupts ([E016](logRefs/E016-completion-path-counters.md)) |
+| `0x1A58` | `CR_DBG_IRQ_LASTEV` | `EVENT_STATUS` seen by the last IRQ task |
+| `0x1A60` | `CR_DBG_EVENTS_SEEN` | OR of every event handled by `kick_events()` |
 | `0x1A78` | `CR_SCRATCH15` | bitmask of the busy data masters (set at kick, cleared at completion) |

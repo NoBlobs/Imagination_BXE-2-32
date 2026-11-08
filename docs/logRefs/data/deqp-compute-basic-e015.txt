@@ -1,0 +1,39 @@
+Test case 'dEQP-VK.compute.pipeline.basic.atomic_barrier_sum_small'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.branch_past_barrier'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.branching_uniform_array_access'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.concurrent_compute'..
+  Pass (Test passed)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_image_to_ssbo_large'..
+  Fail (Comparison failed for Output.values[0])
+Test case 'dEQP-VK.compute.pipeline.basic.copy_image_to_ssbo_small'..
+  Fail (Comparison failed for Output.values[0])
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_bounds'..
+  NotSupported (robustBufferAccess2 not supported by this implementation at vktComputeBasicComputeShaderTests.cpp:1300)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_multiple_invocations'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_to_image_large'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_to_image_small'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_shader'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_all'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_x'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_y'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_z'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.float16_isnan_isinf'..
+  NotSupported (Test requires unsupported features: Float16Int8Features.shaderFloat16 at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.float64_isnan_isinf'..
+  NotSupported (Test requires unsupported features: Features.shaderFloat64 at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.image_atomic_op_local_size_1'..

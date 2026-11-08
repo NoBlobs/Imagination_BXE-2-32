@@ -30,6 +30,10 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E009](E009-pds-exec-base-0x0610.md) | 2026-11-08 | `pds_exec_base` → `0x0610` | the `0x26C0` fault disappears: `0x0610` = `PDS_EXEC_BASE`; task still never completes; SoC hangs after a driver reload |
 | [E010](E010-firmware-fallback.md) | 2026-11-08 | Truncated firmware file after a hang | kernel falls back to `/lib/firmware/powervr/` |
 | [E011](E011-event-enable-0x0128.md) | 2026-11-08 | `0x0128` event enable | it is `EVENT_ENABLE` (mask `0x8FFFE`); it routes events to the host IRQ, so it must stay 0; next fault at `0x7B80` (USC base?) |
-| [E012](E012-usc-base-0x0fc8.md) | 2026-11-08 | `usc_exec_base` → `0x0FC8` | value accepted; no fault, no completion; `PERF_COMPUTE_CYCLE` shows the CDM active and stuck |
+| [E012](E012-usc-base-0x0fc8.md) | 2026-11-08 | `usc_exec_base` → `0x0FC8` | value accepted; no fault, no completion; `PERF_COMPUTE_CYCLE` shows the CDM active and stuck (USC base was elsewhere, see E013) |
+| [E013](E013-gpu-units-init-compute-pass.md) | 2026-11-08 | Full GPU bring-up from the updated spec | **first compute jobs pass** (`empty_shader`, `copy_ssbo_*`, barriers, atomics) |
+| [E014](E014-tq3d-kick-does-not-start.md) | 2026-11-08 | TQ_3D transfer kick | programmed per spec, `ISP_RENDER = 0x13`, but `PERF_3D_CYCLE` stays 0; `0x06A0..0x06B8` = PDS_BGRND0..3 |
+| [E015](E015-slc-flush-before-mmu-inval.md) | 2026-11-08 | MMU fault in a new memory context | flush and invalidate the SLC before MMU invalidation |
+| [E016](E016-completion-path-counters.md) | 2026-11-08 | Completion delivery | BG tasks work; `COMPUTE_FINISHED` comes through the 1 ms poll, the MTS IRQ task does not fire |
 
 The raw data is in [data/](data/).
