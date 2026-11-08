@@ -1,0 +1,17 @@
+[   31.055258] powervr: loading out-of-tree module taints kernel.
+[   31.059293] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[   31.059880] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[   31.059900] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[   31.065043] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+[   33.703837] gpuregs:   0.00s 0130=00000000 12b0=00000000 12b8=00000000 12bc=00000000 1a78=00000000 03c0=0000007f 0bb0=00000000 1a00=c0de0006 0fcc=000000e0 0614=000000da
+[   36.511002] gpuregs:   2.81s 0130=00000000 12b0=00000000 12b8=00000000 12bc=00000000 1a78=00000010 03c0=0000007f 0bb0=00000000 1a00=c0de0006 0fcc=000000e0 0614=000000da
+[   97.231802] powervr cac00000.gpu: Job timeout
+[  155.256142] Modules linked in: powervr(O) drm_shmem_helper gpu_sched drm_gpuvm drm_exec drm_client_lib drm_kms_helper k1_tsensor drm drm_panel_orientation_quirks configfs efivarfs mmp_pdma k1_emac spi_fsl_qspi spi_spacemit_k1
+[8;3H Debian 13 - Linux 7.4.0-rc1-img (GPU clean-room FW, powervr blacklisted)   
+[    0.000000] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+[    0.270993] d4017000.serial: ttyS0 MMIO32:0x00000000d4017000 (irq = 15, base_baud = 921600) is a XScale
+[    4.558245] systemd[1]: Starting modprobe@drm.service - Load Kernel Module drm...
+[    4.831689] systemd[1]: modprobe@drm.service: Deactivated successfully.
+[    4.836301] systemd[1]: Finished modprobe@drm.service - Load Kernel Module drm.
+[    6.675872] RTL8211F Gigabit Ethernet cac81000.ethernet:01: attached PHY driver (mii_bus:phy_addr=cac81000.ethernet:01, irq=POLL)
+[    6.767886] RTL8211F Gigabit Ethernet cac80000.ethernet:01: attached PHY driver (mii_bus:phy_addr=cac80000.ethernet:01, irq=POLL)

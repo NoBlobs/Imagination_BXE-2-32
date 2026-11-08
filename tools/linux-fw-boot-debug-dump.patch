@@ -1,0 +1,50 @@
+diff --git a/drivers/gpu/drm/imagination/pvr_fw.c b/drivers/gpu/drm/imagination/pvr_fw.c
+index c7988278df3f..a2c04d0da455 100644
+--- a/drivers/gpu/drm/imagination/pvr_fw.c
++++ b/drivers/gpu/drm/imagination/pvr_fw.c
+@@ -914,6 +914,37 @@ pvr_fw_validate_init_device_info(struct pvr_device *pvr_dev)
+  *  * -%ENOMEM on out of memory, or
+  *  * -%ETIMEDOUT if firmware processor fails to boot or on register poll timeout.
+  */
++/* DEBUG (clean-room bring-up, not for upstream): dump firmware boot state. */
++static void pvr_fw_debug_dump(struct pvr_device *pvr_dev)
++{
++	struct pvr_fw_mem *fw_mem = &pvr_dev->fw_dev.mem;
++	const struct pvr_fw_layout_entry *bd = pvr_fw_find_layout_entry(pvr_dev, MIPS_BOOT_DATA);
++	const struct pvr_fw_layout_entry *bc = pvr_fw_find_layout_entry(pvr_dev, MIPS_BOOT_CODE);
++	u32 *p;
++
++	drm_info(from_pvr_device(pvr_dev), "MIPS_EXCEPTION_STATUS=%08x REMAP_UNMAPPED=%016llx\n",
++		 pvr_cr_read32(pvr_dev, ROGUE_CR_MIPS_EXCEPTION_STATUS),
++		 pvr_cr_read64(pvr_dev, ROGUE_CR_MIPS_ADDR_REMAP_UNMAPPED_STATUS));
++	if (bd) {
++		p = pvr_fw_object_vmap(fw_mem->data_obj);
++		if (!IS_ERR(p)) {
++			print_hex_dump(KERN_INFO, "fw bootdata: ", DUMP_PREFIX_OFFSET, 32, 4,
++				       (u8 *)p + bd->alloc_offset, 0x40, false);
++			print_hex_dump(KERN_INFO, "fw bd priv: ", DUMP_PREFIX_OFFSET, 32, 4,
++				       (u8 *)p + bd->alloc_offset + 0x800, 0x100, false);
++			pvr_fw_object_vunmap(fw_mem->data_obj);
++		}
++	}
++	if (bc) {
++		p = pvr_fw_object_vmap(fw_mem->code_obj);
++		if (!IS_ERR(p)) {
++			print_hex_dump(KERN_INFO, "fw bootcode: ", DUMP_PREFIX_OFFSET, 32, 4,
++				       (u8 *)p + bc->alloc_offset, 0x40, false);
++			pvr_fw_object_vunmap(fw_mem->code_obj);
++		}
++	}
++}
++
+ int
+ pvr_fw_init(struct pvr_device *pvr_dev)
+ {
+@@ -968,6 +999,7 @@ pvr_fw_init(struct pvr_device *pvr_dev)
+ 	err = pvr_wait_for_fw_boot(pvr_dev);
+ 	if (err) {
+ 		drm_err(from_pvr_device(pvr_dev), "Firmware failed to boot\n");
++		pvr_fw_debug_dump(pvr_dev);
+ 		goto err_fw_stop;
+ 	}
+ 

@@ -1,4 +1,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Thalles Campagnani
+
+# Build output (make -C src): objects, ELF, disassembly, .fw container
+/build/
+*.o
+*.d
+*.elf
+*.fw
+*.dis
+
+# Logs and captures from board runs
+*.log
+*.trace
+*.dump
+
+# Python
 __pycache__/
 *.pyc
+
+# Editors / OS
+*~
+*.swp
+.vscode/
+.idea/
+.DS_Store
