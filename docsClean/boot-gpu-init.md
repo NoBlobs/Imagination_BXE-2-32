@@ -108,10 +108,42 @@ boot sequence programs:
   `MTS_DM4_INTERRUPT_ENABLE = 0x04`. Each `MTS_DMn_INTERRUPT_ENABLE` selects which
   `EVENT_STATUS` bits raise the IRQ task tied to DM *n*. The IRQ task then reads
   `EVENT_STATUS` to see what happened.
-- **Confirming the clean team's E011:** `ROGUE_CR_EVENT_ENABLE` (`0x0128`) routes events to
-  the **host** IRQ line. A MIPS firmware keeps it at 0 (the mainline host does not expect
-  GPU-event IRQs; it would log `nobody cared`). The firmware's own event delivery is the
-  MTS path above.
+- **Confirming the clean team's E011 (and why):** on this **single-core** GPU
+  `ROGUE_CR_EVENT_ENABLE` (`0x0128`) stays **0**. The firmware does later write
+  `EVENT_ENABLE = 0x8EAC` — but **only on multicore** (`ROGUE_CR_MULTICORE_SYSTEM ≥ 2`), as
+  part of broadcasting the primary core's event-enable/catalogue state to the secondary
+  cores; the code path returns early on a single core. With `MULTICORE_SYSTEM = 1` here it
+  is never taken, so `EVENT_ENABLE = 0` is correct and completions reach the firmware purely
+  through the `MTS_DMn_INTERRUPT_ENABLE` path above. (`EVENT_ENABLE` drives the GPU's
+  external event-IRQ line, which the mainline host does not service — hence `nobody cared`
+  when it was set.)
+
+## B′. How the IRQ task (HW2) is delivered and consumed (answers Q9)
+
+- **Nothing more than section B is needed to *route* completions to HW2.**
+  `ROGUE_CR_MTS_GARTEN_WRAPPER_CONFIG` (`0x0B50`) is programmed by the **host**
+  (`= IDLE_CTRL_META`, in the MIPS boot path), **not** by the firmware — if the BG task
+  (HW1) is being delivered, the Garten wrapper is already configured. `MTS_SCHEDULE_ENABLE`
+  (`0x0BC8`) is **not written by the firmware or the host**; leave it at reset. So the only
+  firmware-side requirement for event-driven HW2 is the per-DM `MTS_DMn_INTERRUPT_ENABLE`
+  values of section B (e.g. DM4 = `0x04` for `COMPUTE_FINISHED`).
+- **Ending the IRQ task:** write `0x0B08 = 2` then **read it back** (the read posts the
+  write). No `MTS_INTCTX` clear or counted-task acknowledgement is needed. (The BG task ends
+  with `0x0B08 = 0` + read-back.)
+- **Which DM raised it:** there is **no "which DM" register**. The IRQ task reads the
+  **core-local** `ROGUE_CR_EVENT_STATUS` (`CR[0x130]` in the primary core bank, not the
+  broadcast/host view) and tests the per-DM completion bits: `KERNEL_FINISHED` (b1) → DM0,
+  `COMPUTE_FINISHED` (b2) → DM4, `PIXELBE_END_RENDER` (b3) → DM3, `TA_FINISHED` (b5) → DM2,
+  `PM_OUT_OF_MEMORY` (b7) → SPM, `MMU_PAGE_FAULT` (b9) → HWR. It clears what it handled via
+  `ROGUE_CR_EVENT_CLEAR`. On multicore the per-core events are accumulated through the XPU
+  event registers (`0x08F0`) — not relevant on this single-core SoC.
+- **MIPS side:** HW2 is MIPS interrupt **IM4**; it must be unmasked (`Status.IM2..IM4`,
+  i.e. `0x1C00`) with `Cause.IV = 1` and `IntCtl.VS = 256 B`, vectoring to `EBASE + 0x600`
+  (HW0 timer `+0x400`, HW1 BG `+0x500`). See [execution-environment](execution-environment.md).
+  If HW2 only ever fires when the firmware self-schedules it (`MTS_SCHEDULE = 0x20`) but not
+  on completions, re-check that `EVENT_STATUS`/`EVENT_CLEAR` are read on the **primary core
+  bank**, that IM4 stays unmasked, and that the handler re-enables interrupts on exit —
+  the event→HW2 routing itself is just the section-B per-DM enables.
 
 ## C. MTS task-context association and the firmware-started handshake
 

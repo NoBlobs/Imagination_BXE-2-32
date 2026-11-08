@@ -134,15 +134,22 @@ Trace MAIN id 120: `Kick 3D: FWCtx … @ …, RTD …, Partial render:…, CSW r
 …)`. Read `ROGUE_CR_TIMER`, arm the watchdog and record the execution state of DM 3. PM 3D
 timeouts are in [observed-sequences](observed-sequences.md).
 
-### F. Trigger
+### F. Trigger (two writes — corrects Q5/Q8)
 
-- The pixel pipeline is started through **`ROGUE_CR_ISP_RENDER`** (`0x0F08`). The reset
-  write in phase D is not the trigger. Last write.
-- **Start value (answers the clean team's Q5):** the trigger is a **read-modify-write that
-  sets bit 4** — `BCAST[ROGUE_CR_ISP_RENDER] = ROGUE_CR_ISP_RENDER | 0x10` (**D**/**O**).
-  The readiness precondition checked before programming is `(ROGUE_CR_ISP_RENDER & 3) == 3`.
-  A context **store** request uses `ROGUE_CR_ISP_RENDER` the other way (a stop request),
-  not the `| 0x10` start.
+The pixel pipeline needs **two** final writes, in order (**D**/**O**):
+
+1. `BCAST[ROGUE_CR_ISP_RENDER] = ROGUE_CR_ISP_RENDER | 0x10` — read-modify-write, set bit 4.
+   The readiness precondition checked earlier is `(ROGUE_CR_ISP_RENDER & 3) == 3`. (A
+   context **store** uses `ROGUE_CR_ISP_RENDER` the other way — a stop request — not `| 0x10`.)
+2. **`BCAST[0x0F00] = 1`** (no public name) — this is the actual **pixel-pipe launch**, the
+   true last write. On multicore it is issued once the fragment core mask covers all cores;
+   single-core it is always issued.
+
+> **This is the fix for the clean team's Q8.** Setting `ISP_RENDER` to `0x13` (host
+> `isp_render 0x3` then `| 0x10`) is **not** enough: without the following
+> `BCAST[0x0F00] = 1`, the pipe never starts, `PERF_3D_CYCLE` stays 0 and no
+> `PIXELBE_END_RENDER` arrives — exactly the reported symptom. The reset write
+> `ROGUE_CR_ISP_RENDER = 0` in phase D is not a trigger.
 
 ---
 
@@ -156,6 +163,13 @@ timeouts are in [observed-sequences](observed-sequences.md).
 Power domain on; `BCAST[ROGUE_CR_MULTICORE_FRAGMENT_CTRL_COMMON]` = control value (also used
 for the ISP configuration below); memory context bound to a BIF slot (DM 3, according to a
 flag at `cmd+0xE0` bit 0).
+
+> **Mandatory gate (Q8).** Binding the memory context to the BIF slot (DM 3) **must
+> succeed** before any ISP/PBE register is written: the whole register-programming block and
+> the trigger are conditional on it (if the BIF activation returns "not done", the firmware
+> skips the kick entirely and the pipe never starts). This is the same
+> `ROGUE_CR_BIF_CAT_BASE_INDEX` (PIXEL field) activation as for a 3D kick — a transfer is a
+> sub-case of 3D and needs it too.
 
 ### B. Transfer configuration (broadcast)
 
@@ -180,7 +194,11 @@ flag at `cmd+0xE0` bit 0).
 ### D. Trace, watchdog and trigger
 
 As for 3D: trace MAIN id 121 `Kick 3D TQ: FWCtx … @ …, CSW resume:…. (PID:…, …)`,
-watchdog, and start through `ROGUE_CR_ISP_RENDER` as the last write.
+watchdog, then the **two-write trigger** — `BCAST[ROGUE_CR_ISP_RENDER] |= 0x10`, then
+`BCAST[0x0F00] = 1` (the real launch). `0x06B0` is **not** written by the transfer kick.
+
+**Completion (Q8):** a TQ_3D ends on **`PIXELBE_END_RENDER`** (`ROGUE_CR_EVENT_STATUS` bit 3),
+the same event as a normal 3D render; it is handled by the shared 3D-completion path.
 
 ---
 
@@ -198,13 +216,28 @@ record the DM's execution state
 TRIGGER (last write):
   - TA:     CR[set+0x400] = 1
   - CDM:    BCAST[0x0478] = 1
-  - 3D/TQ:  ROGUE_CR_ISP_RENDER (pixel pipeline start)
+  - 3D/TQ:  BCAST[ROGUE_CR_ISP_RENDER] |= 0x10 ; then BCAST[0x0F00] = 1  (0x0F00 is the launch)
 ```
+
+## Compute: one kick per command, zero workgroups (answers Q10)
+
+The compute kick points the CDM at the host-built **control stream**
+(`cmd_ctrl_stream_base` → `BCAST[0x0480/0x0484]`) and issues **exactly one** kick
+(`BCAST[0x0478] = 1`) per `rogue_fwif_cmd_compute`. The firmware does **not** inspect the
+work-group dimensions and does **not** special-case a zero dimension (it neither skips the
+kick nor loops): the CDM hardware walks the whole control stream in that single run, and any
+multiple dispatches are encoded **inside that one stream** (no "several CDM runs" per
+command). So for `empty_workgroup_{x,y,z}` the firmware behaves exactly as for
+`empty_workgroup_all` — it kicks once and waits for `COMPUTE_FINISHED`. A difference in
+outcome between them is therefore **not** a firmware per-dimension rule; look at the CDM
+control stream the host/Mesa builds (how a zero-dimension dispatch is encoded and
+terminated) rather than at the kick path.
 
 ## Confidence and pending items
 
 - **High confidence:** the phases and dependencies, the named registers
   (`ROGUE_CR_CDM_*`, `ROGUE_CR_ISP_RENDER`/`ISP_CTL`, `ROGUE_CR_MULTICORE_*_CTRL_COMMON`),
-  the broadcast offsets and the trigger registers.
+  the broadcast offsets, and the trigger sequence (3D/TQ: `ISP_RENDER |= 0x10` then
+  `0x0F00 = 1`; CDM: `0x0478 = 1`).
 - **`PENDING`:** the field name of each remaining `cmd+0xNN` (read the public header and
-  its check file), and the exact 3D start value.
+  its check file).

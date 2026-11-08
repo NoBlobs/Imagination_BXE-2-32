@@ -51,6 +51,40 @@ bit 5, `FW_FAULT` bit 6, `RESTART_REQUESTED` bit 7.
 Observed: from lockup to recovery, about 0.43 ms. See
 [observed-sequences](observed-sequences.md).
 
+## Reset sequence (answers the clean team's Q11)
+
+The complete ordered sequence run from the IRQ task once a lockup/fault is confirmed
+(**D**/**O**):
+
+1. **Stop the DMs** and hold scheduling (HWR state `RESET_IN_PROGRESS`).
+2. **Wait for the SLC to go idle** — poll `ROGUE_CR_SLC_STATUS0` (bit 2
+   `FLUSH_INVAL_PENDING` clear), after a flush/invalidate via `ROGUE_CR_SLC_CTRL_FLUSH_INVAL`.
+3. **Disable partial renders** (`ROGUE_CR_PM_PARTIAL_RENDER_ENABLE = 0`).
+4. **Pulse `ROGUE_CR_SOFT_RESET`** through the **XPU broadcast** bank, then release it:
+   - assert: low word (`0x0100`) = `0x13FFFC1D`, high word (`0x0104`) = `0xFFEFFE00`;
+   - release: both words = 0.
+
+   These bits reset the GPU data-master/pipeline units **but not the MIPS core or the MTS
+   (Garten) wrapper**, so the firmware keeps running. With `LAYOUT_MARS` present the MIPS
+   core sits in its own (MARS) power/reset domain, consistent with these bits not touching
+   it. The firmware does **not** use `ROGUE_CR_SOFT_RESET2` in recovery. (The larger
+   "assert-and-hold" value `0x13FFFC1D`/`0xFFEFFE00` differs from the full
+   power-on assert `0xF3FFFC1D`/`0xFFEFFFF8`, which is **not** used by HWR.)
+5. **Re-initialise the GPU units** — re-run the whole GPU-units init (exec bases, SLC,
+   unit defaults, event routing), i.e. section A of [boot-gpu-init](boot-gpu-init.md), and
+   **rebuild the BIF page-catalogue slots** (`ROGUE_CR_BIF_CAT_BASE1..7`).
+6. **Per-DM recovery:** skip/retire the guilty command, clear the DM lockup flags and its
+   events (`ROGUE_CR_EVENT_CLEAR`), request freelist reconstruction if needed.
+7. **Resume scheduling** — set `hwr_state_flags = HARDWARE_OK` and **kick the MTS**
+   (`ROGUE_CR_MTS_SCHEDULE`).
+
+So the clean team's draft order ("soft reset → SLC flush/invalidate → GPU units init →
+re-enable MTS routing") is close but incomplete: the SLC wait and **disable partial
+renders** come **before** the reset; the reset is a **pulse** (not assert-and-hold); after
+it, **re-init the units and rebuild the BIF catalogue** and then do the **per-DM
+skip/retire** before kicking the MTS. The MTS per-DM event routing is re-established as part
+of the units re-init (section B of boot-gpu-init).
+
 ## HWR log (`rogue_fwif_hwrinfobuf`)
 
 Each recovery is logged in a `rogue_hwrinfo` entry (see
