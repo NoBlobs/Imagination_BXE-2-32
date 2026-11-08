@@ -22,7 +22,9 @@ role is **D** (firmware analysis) and/or **O** (observed).
 | `ROGUE_CR_EVENT_STATUS` / `ROGUE_CR_EVENT_CLEAR` | `0x0130` / `0x0138` | GPU events (public field names): b1 `KERNEL_FINISHED`, b2 `COMPUTE_FINISHED`, b3 `PIXELBE_END_RENDER`, b5 `TA_FINISHED`, b6 `TA_TERMINATE`, b7 `PM_OUT_OF_MEMORY`, b8 `PM_3D_MEM_FREE`, b9 `MMU_PAGE_FAULT`, b10 `POWER_COMPLETE`, b11 `POWER_ABORT`, b12 `GPIO_REQ`, b13 `GPIO_ACK`, b15 `USC_TRIGGER`, … |
 | `ROGUE_CR_MTS_SCHEDULE` | `0x0B00` | `0` = schedule the BG task; `0x20` (`CONTEXT` field, bit 5) = schedule the IRQ task |
 | (no public name: MTS task end) | `0x0B08` | `0` = end of BG, `2` = end of IRQ (read back to order) |
-| `ROGUE_CR_MTS_DM0_INTERRUPT_ENABLE` | `0x0B58` | b12 = power/GPIO interrupt |
+| `ROGUE_CR_MTS_DM0..5_INTERRUPT_ENABLE` | `0x0B58 + 8·n` | selects which `EVENT_STATUS` bits raise the IRQ task of DM *n* — this is how GPU events reach the firmware (boot values in [boot-gpu-init](boot-gpu-init.md)) |
+| `ROGUE_CR_EVENT_ENABLE` | `0x0128` | routes events to the **host** IRQ line; a MIPS firmware keeps it **0** |
+| `ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC` / `..._BGCTX_...` | `0x0B40` / `0x0B30` | IRQ/BG task-context ↔ DM association (set at boot) |
 | `ROGUE_CR_MIPS_WRAPPER_IRQ_STATUS` | `0x08A8` | write `1` = IRQ to the host |
 
 > Polling `EVENT_STATUS` (`0x0130`) after a kick is where a hung GPU is detected (failed
@@ -93,3 +95,19 @@ and [kick-compute-and-3d](kick-compute-and-3d.md).
 USC (shader) breakpoints, no public names: `0x4030` address, `0x4038` handler, `0x4040`
 control (b2:0 slot/DM, b3 enable), `0x4050`/`0x06D8` temporaries — see
 [execution-environment](execution-environment.md).
+
+## Boot / GPU-units init
+
+Registers programmed once per power-on, before any kick (full sequence and values in
+[boot-gpu-init](boot-gpu-init.md)):
+
+| Register | Offset | Role |
+|---|---|---|
+| (no public name: PDS exec base) | `0x0610` / `0x0614` | 64-bit PDS execution base = `sysinit.pds_exec_base` |
+| (no public name: USC exec base ×3) | `0x4008`, `0x4010`, `0x4028` (+`4` hi) | USC execution base = `sysinit.usc_exec_base` (three pairs) |
+| `ROGUE_CR_SYS_BUS_SECURE` | `0xA100` | written `0` at power-on; needs device-info `SYS_BUS_SECURE_RESET` |
+| `ROGUE_CR_SLC_CTRL_BYPASS` | — | SLC bypass set for the 16 KiB SLC on this GPU |
+| (no public name: unit defaults) | `0x0600`–`0x0720`, `0x18C0`–`0x1900`, `0x13F8`, `0x2010`–`0x2100` | FW-only USC/TPU/MCU/VDM unit configuration (values in [boot-gpu-init](boot-gpu-init.md)) |
+| (no public name: init-done polls) | `0x4068`, `0x0CD8` | write `1`, poll bit 0 → 0 |
+| (no public name: active dusts) | `0x0050` | `(1 << num_dusts) − 1` (per job) |
+| (no public name: power-island request) | `0x0038` | b0 on/off, b1 request pulse (per job) |

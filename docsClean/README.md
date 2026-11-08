@@ -80,7 +80,11 @@ Read **[1] Clean-room process** first. In short:
     format, log groups, HWPerf status.
 22. [Firmware trace IDs](trace-ids.md) — the public trace-ID table, key events per
     subsystem, log groups and `log_type`.
-23. [Glossary](glossary.md) — acronyms and terms (DM, cCCB, KCCB, UFO, SLC, BIF, MTS, HWR,
+23. [GPU bring-up and boot register sequence](boot-gpu-init.md) — the GPU-side register
+    programming at every power-on before the first kick: GPU-units init, PDS/USC execution
+    bases, GPU-event → IRQ-task routing, MTS task-context association, the firmware-started
+    handshake, and per-job dust/unit power.
+24. [Glossary](glossary.md) — acronyms and terms (DM, cCCB, KCCB, UFO, SLC, BIF, MTS, HWR,
     SPM, PM, RTData, PB, USC, TA, CDM, …).
 
 ---

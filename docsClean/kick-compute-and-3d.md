@@ -70,6 +70,23 @@ prepared):
 - **`BCAST[0x0478] = 1`**: the CDM *run* register (no public name). Last write; A–E must
   be complete.
 
+### Which `rogue_fwif_compute_regs` fields are used (answers Q7)
+
+On this GPU (features/BRNs from the [device-info block](memory-model.md#device-information-block)),
+only the always-present fields are programmed:
+
+- **Used:** `tpu_border_colour_table` (B), `cdm_ctrl_stream_base` (B),
+  `cdm_context_state_base_addr` (B), and the CDM PDS registers from the context's
+  `rogue_fwif_cdm_registers_cswitch` (E), including `cdm_resume_pds1`.
+- **Not programmed** (their gating feature/BRN is absent, so the host leaves them unused):
+  `tpu` (needs BRN 49927), `cdm_item` (needs `COMPUTE_MORTON_CAPABLE`), `compute_cluster`
+  (needs `CLUSTER_GROUPING`), `tpu_tag_cdm_ctrl` (needs `TPU_DM_GLOBAL_REGISTERS`), and the
+  `cdm_cb*` user-mode-queue fields (need `CDM_USER_MODE_QUEUE`). A reimplementation for this
+  GPU can ignore them.
+
+> **Prerequisite:** the PDS/USC execution bases must have been programmed at boot, or the
+> CDM faults on its first PDS/USC fetch. See [boot-gpu-init](boot-gpu-init.md).
+
 ---
 
 ## Fragment kick (3D / DM 3)
@@ -121,8 +138,11 @@ timeouts are in [observed-sequences](observed-sequences.md).
 
 - The pixel pipeline is started through **`ROGUE_CR_ISP_RENDER`** (`0x0F08`). The reset
   write in phase D is not the trigger. Last write.
-- `TO CONFIRM`: the exact start value written to `ROGUE_CR_ISP_RENDER` (field definitions
-  in `pvr_rogue_cr_defs.h`).
+- **Start value (answers the clean team's Q5):** the trigger is a **read-modify-write that
+  sets bit 4** — `BCAST[ROGUE_CR_ISP_RENDER] = ROGUE_CR_ISP_RENDER | 0x10` (**D**/**O**).
+  The readiness precondition checked before programming is `(ROGUE_CR_ISP_RENDER & 3) == 3`.
+  A context **store** request uses `ROGUE_CR_ISP_RENDER` the other way (a stop request),
+  not the `| 0x10` start.
 
 ---
 

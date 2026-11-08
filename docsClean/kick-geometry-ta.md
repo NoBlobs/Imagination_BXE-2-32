@@ -51,23 +51,30 @@ The phases below have a **mandatory order**: each depends on the previous one.
 
 ### C. Program the register set (command data)
 
-| Register | Data | Role |
-|---|---|---|
-| `CR[set+0xC88]` | context state | VDM/TA context control |
-| `CR[set+0xC98]` | context state | VDM context address |
-| **poll** `CR[set+0xC80]` | — | acceptance |
-| `CR[set+0xC28]` | HWRTData address | context RTData in the PM |
-| **poll** `CR[set+0xC38]`, `CR[set+0xC40]` | — | acceptance |
-| `CR[set+0xC00]` | context base | VDM context store base |
-| `CR[set+0xC08]` | command field | VHeap / geometry buffer |
-| `CR[set+0xC10]` | command field | TPC |
-| `CR[set+0xC18]` | command field | TE region headers |
-| `CR[set+0xC20]` | command field | list stack pointer (ALIST/MLIST) |
-| `CR[set+0x4098]` (byte) | TE configuration | partition/region |
+The values come either from the **host-prepared `rogue_fwif_geom_regs`** block inside the
+command (field names below, from the public header — this resolves the earlier `PENDING`
+and answers the clean team's Q4) or from **firmware-maintained context state** (the VDM
+context-resume addresses the firmware tracks per context — these are **not** in the
+command):
 
-Each poll must complete before the writes that follow it. Otherwise, the order between
-independent writes is free. Trace: BIF id 19 `Setup register set=… DM=…`, RTD id 25/33
-`TA Buffers: …`, RTD id 24 `TE Region headers base …`.
+| Register | Source | `rogue_fwif_geom_regs` field (or state) |
+|---|---|---|
+| `CR[set+0xC18]` | command | `te_psg` |
+| `CR[set+0xC20]` | command | `tpu` |
+| `CR[set+0xC10]` | command | `pds_ctrl` |
+| `CR[set+0xC00]` | command | `vdm_context_resume_task0_size` |
+| `CR[set+0xC08]` | command | `vdm_context_resume_task3_size` (unused on this GPU: feature `VDM_OBJECT_LEVEL_LLS` absent) |
+| `CR[set+0xC80]`/`+0xC84` | command | `tpu_border_colour_table` (first kick) or `vdm_draw_indirect0` (resume) — selected by a flag |
+| `CR[set+0xC88]` … `+0xC98` | command + state | VDM control-stream base (`vdm_ctrl_stream_base`) and its control (with a command flag field) |
+| **poll** `CR[set+0xC80]` | — | acceptance |
+| `CR[set+0xC28]` | state | context RTData address in the PM |
+| **poll** `CR[set+0xC38]`, `CR[set+0xC40]` | — | acceptance (both loaded from context state) |
+| `CR[set+0x4098]` (byte) | command | TE partition/region configuration |
+
+`ppp_ctrl` (`geom_regs` offset 0x1C) is consumed by the PM/HWRTData load path, not this
+register set. Each poll must complete before the writes that follow it; otherwise the order
+between independent writes is free. Trace: BIF id 19 `Setup register set=… DM=…`, RTD id
+25/33 `TA Buffers: …`, RTD id 24 `TE Region headers base …`.
 
 ### D. Context-switch state and lists
 
@@ -111,9 +118,11 @@ command and processes the updates (see [client-ccb](client-ccb.md) and
 
 - **High confidence:** the phases and their dependencies (preconditions → PM → register
   set → CSW → enable → watchdog → **trigger last**), the listed offsets and the mandatory
-  polls.
-- **`PENDING`:** which field of `rogue_fwif_cmd_geom` (and of its `regs` block) feeds each
-  "command field" row — to be matched against the public header and its check file.
+  polls. The `rogue_fwif_geom_regs` field → register mapping in Phase C (Q4) is resolved
+  above.
+- The VDM control pair (`CR[set+0xC88]`…`+0xC98`) mixes the host `vdm_ctrl_stream_base`
+  with firmware context state; the exact split of the 64-bit base across `+0xC90`/`+0xC98`
+  is a detail the implementer can finish from the public field widths.
 
 The 3D, transfer and compute kicks follow the same skeleton. See
 [kick-compute-and-3d](kick-compute-and-3d.md).

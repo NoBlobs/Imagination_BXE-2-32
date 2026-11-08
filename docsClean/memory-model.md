@@ -50,6 +50,23 @@ must reserve room for:
 
   Field definitions: `pvr_rogue_cr_defs.h`. The fixed remaps for boot code, boot data and
   exception code (`ROGUE_CR_MIPS_ADDR_REMAP1..3_*`) are programmed by the host.
+- **Write order of a remap entry (answers the clean team's Q3).** The 64-bit
+  `RANGE_CONFIG` is written as two 32-bit halves, **low word first, then high word** (**D**):
+
+  ```
+  CR[0x0878]     = BASE_ADDR_IN | (REGION_SIZE << 7) | (ENTRY << 1) | MODE_ENABLE   // low
+  CR[0x087C]     = (ADDR_OUT(PA >> 12)) << 4 | OS_ID                                // high
+  // for the paired odd page, same two writes with ENTRY+16 and VA+page_size:
+  CR[0x0878]     = (low word, ENTRY+16, BASE_ADDR_IN + page_size)
+  CR[0x087C]     = (high word for the odd page)
+  (void)CR[0x087C]   // read back the high word to flush the posted register writes
+  ```
+
+  The **low word carries `MODE_ENABLE` (bit 0) and the `ENTRY` index**, so the entry it
+  selects is the one named in the low word; writing the low word then the high word installs
+  that entry. A **read-back of the high half** (`0x087C`) flushes the posted writes before
+  the mapping is relied on. So the committing order is low→high per entry, not "low, high,
+  low".
 - The **TLB refill handler** (`0x9FC02000`) reads the physical PFN from the **host page
   table** (at `0xCF000000`), puts it into the corresponding remap entry, and keeps the TLB
   as identity. That is how the 32-bit MIPS reaches the 36-bit bus.
@@ -126,6 +143,54 @@ The host needs to know where each firmware section goes in memory. The format is
 > For a reimplementation, the essential point is to **export a correct layout table** so
 > that the host remaps each section. `MIPS_BOOT_CODE`, `MIPS_BOOT_DATA` and
 > `MIPS_EXCEPTIONS_CODE` have dedicated remaps.
+
+### Device information block
+
+The device-info block (between the ELF and the info header) carries the **BRN/ERN masks and
+the feature mask + feature values** for this specific GPU. The host (and the firmware, via
+`sysinit`) uses these to size structures and gate behaviour. The format is public
+(`pvr_fw_info.h`, consumed in `pvr_fw.c`); the **values** below are the ones carried by the
+redistributable **open** firmware image for BVNC `36.29.52.182` (**P** — read from the open
+image's own device-info block, not from the closed firmware). This answers the clean team's
+Q2 and corrects several of its assumptions.
+
+- **Image facts:** info version 3; 6 layout entries; device-info block 4096 bytes.
+- **BRN:** `63553`.
+- **ERN:** `35421, 38748, 42290, 42606, 47025, 57596` (the clean team had only the first
+  two — `42290, 42606, 47025, 57596` were missing).
+- **Feature values (corrections in bold):**
+
+| Feature | Value |
+|---|---|
+| `VIRTUAL_ADDRESS_SPACE_BITS` | 40 |
+| `PHYS_BUS_WIDTH` | 36 |
+| **`SLC_SIZE_IN_KILOBYTES`** | **16** (not 0 — affects the SLC-bypass decision at boot, see [boot-gpu-init](boot-gpu-init.md)) |
+| `SLC_BANKS` | 1; `SLC_CACHE_LINE_SIZE_BITS` 512; `SLC_SIZE_CONFIGURABLE` present |
+| `NUM_ISP_IPP_PIPES` | 2 |
+| `NUM_CLUSTERS` | 1; `NUM_RASTER_PIPES` 1; `MAX_PARTITIONS` 8 |
+| `ISP_MAX_TILES_IN_FLIGHT` | 2; `ISP_SAMPLES_PER_PIXEL` 1; `TILE_SIZE_X`/`Y` 16 |
+| `COMMON_STORE_SIZE_IN_DWORDS` | 13312; `USC_MIN_OUTPUT_REGISTERS_PER_PIX` 2 |
+| `NUM_OSIDS` | 8 |
+| `FBCDC` / `FBCDC_ALGORITHM` | 50; `FBCDC_ARCHITECTURE` 7 |
+| `SIMPLE_PARAMETER_FORMAT_VERSION` | 2 (`SIMPLE_INTERNAL_PARAMETER_FORMAT` + `_V2`) |
+| `XE_ARCHITECTURE` | 1 |
+| `XPU_MAX_SLAVES` | 3; `XPU_MAX_REGBANKS_ADDR_WIDTH` 19; `XPU_REGISTER_BROADCAST` 1 |
+
+- **Boolean features present** (the clean team had assumed several of these **absent** —
+  marked ✗→present): `MIPS`, `COMPUTE`, `COMPUTE_OVERLAP`, `COREID_PER_OS`, `IRQ_PER_OS`,
+  `GPU_MULTICORE_SUPPORT`, `GPU_VIRTUALISATION`, `GS_RTA_SUPPORT`, `PBE2_IN_XE`,
+  `PBVNC_COREID_REG`, `PERFBUS`, `ROGUEXE`, `SOC_TIMER`, **`AXI_ACELITE`**,
+  **`CDM_CONTROL_STREAM_FORMAT` = 1**, **`LAYOUT_MARS` = 1**, **`SYS_BUS_SECURE_RESET`**,
+  **`XE_MEMORY_HIERARCHY`**, `XE_TPU2`.
+- **Features absent** on this GPU (so the corresponding `rogue_fwif_*` fields are unused):
+  `VDM_DRAWINDIRECT`, `VDM_OBJECT_LEVEL_LLS`, `TESSELLATION`, `S7_TOP_INFRASTRUCTURE`,
+  `XT_TOP_INFRASTRUCTURE`, `META*` (`META_COREMEM_SIZE` 0), `ZLS_SUBTILE`,
+  `TPU_DM_GLOBAL_REGISTERS`. `FBC_MAX_*_DESCRIPTORS` = 0.
+
+> **`SYS_BUS_SECURE_RESET` is required** (the clean team found this by experiment): without
+> it in the device info, the host leaves `ROGUE_CR_SYS_BUS_SECURE` at its reset value and
+> the MIPS cannot fetch from the reset vector `0xBFC00000`. The firmware also writes
+> `ROGUE_CR_SYS_BUS_SECURE = 0` during power-on (see [boot-gpu-init](boot-gpu-init.md)).
 
 ## Page-table entry format (host side — public ABI)
 
