@@ -20,16 +20,16 @@ Mesa `pvr`.
 | Runtime PM, warm boot | [E005](logRefs/E005-runtime-pm-cycle.md) |
 | Vulkan enumeration | `PowerVR B-Series BXE-2-32 MC1` |
 | Client CCB: fences, updates, cleanup, BIF slots | |
-| **Compute (CDM) jobs** | `dEQP-VK.compute.pipeline.basic`: **67/82 pass**, 6 fail (images), 9 not supported ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
+| **Compute (CDM) jobs** | `compute.pipeline.basic` **67/82** (6 fail = images, 9 not supported), `indirect_dispatch` **24/24** of the supported cases, `builtin_var` **11/11** ([E019](logRefs/E019-hwr-and-compute-basic-67.md), [E021](logRefs/E021-watchdog-deadline-wider-compute.md)) |
 | **Event delivery through the MTS IRQ task** | HW2 on every completion ([E018](logRefs/E018-irq-task-delivery.md)); the polls are a backstop |
-| **HWR** | MMU fault or 2 s watchdog → SOFT_RESET pulse → units re-init → discard; ~0.28 ms; 13 recoveries in one dEQP run without a hang ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
+| **HWR** | MMU fault or watchdog at the context's `max_deadline_ms` (30 s) → SOFT_RESET pulse → units re-init → discard; ~0.28 ms; 13 recoveries in one dEQP run without a hang ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
 | TQ_3D launch | the 3D pipe starts (`ISP_RENDER \|= 0x10`, `0x0F00 = 1`) ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)) |
 
 ## Not working yet
 
 | Item | State |
 |---|---|
-| TQ_3D output | the pipe runs, then writes to address 0 and HWR discards the job ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md), Q12). Compute cases with images fail (6). |
+| TQ_3D output | the pipe runs, then the PBE writes to address 0, even with the corrected table of the Q12 answer; HWR discards the job ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md), [E020](logRefs/E020-tq3d-pbe-two-banks.md), Q13). Compute cases with images fail (6). |
 | Geometry / fragment / TDM kicks | not implemented; retired at once |
 | HWR info buffer, context-reset notification (FWCCB) | not implemented (the host is not told about a discarded job) |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
@@ -57,10 +57,12 @@ Mesa `pvr`.
 | E017 | TQ launch = `ISP_RENDER \|= 0x10` then `0x0F00 = 1`: the 3D pipe runs; fault writing to address 0 |
 | E018 | the MTS IRQ task fires on every completion; the polls only race it |
 | E019 | HWR from the spec works (~0.28 ms); compute basic 67/82 |
+| E020 | corrected TQ table: the address-0 write remains; host PBE words carry no address; without `event_pixel_pds_*` the pipe never ends |
+| E021 | watchdog must follow `max_deadline_ms`; indirect_dispatch 24/24, builtin_var 11/11 |
 
 ## Next steps
 
-1. Q12: find the source of the TQ's address-0 write, so that images work.
+1. Q13: find where the TQ destination comes from, so that images work.
 2. Fragment (3D) kick: the spec maps the registers and the two-write launch.
 3. Geometry (TA) kick, with PM/free-list handling (`partial-render-spm.md`).
 4. HWR info buffer and FWCCB context-reset notification, so that Vulkan sees device loss.

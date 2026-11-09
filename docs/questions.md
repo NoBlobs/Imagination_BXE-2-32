@@ -9,38 +9,32 @@ answered, the implementation uses the stated assumption.
 
 ## Open
 
-### Q12 — TQ_3D writes to address 0
+### Q13 — TQ_3D destination: the PBE still writes to address 0
 
-With the two-write launch the pixel pipe starts, then takes an MMU fault
-([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)):
+With the table from the Q12 answer applied exactly ([E020](logRefs/E020-tq3d-pbe-two-banks.md)):
+- WORD0 → `0x1510 + 8n` and WORD1 → `0x1550 + 8n` from `pbe_wordx_mrty[2n]`, `[2n+1]`;
+- `0x0FD8` = tiles in flight;
+- `0x0F20` only in mode 2; `0x06B0` not written;
+- `ISP_RENDER |= 0x10`, then `0x0F00 = 1`.
 
-- `BIF_FAULT_BANK0_MMU_STATUS` = `0x1041`/`0x2041` (the context's cat base);
-- `REQ_STATUS` = `0x0002b100_00000000`, i.e. a **write** to address `0x0`, tag field
-  `0x2B1` (TAG_ID `0x31`, TAG_SB `0x0A`).
-
-The host's transfer command for `dEQP-VK.compute.pipeline.basic.copy_ssbo_to_image_small`
-had:
-
-| Field | Value |
+| `event_pixel_pds_*` (`0x0628/0618/0620`) | Result |
 |---|---|
-| `pbe_wordx_mrty[0..2]` | `0x0200007c96800000`, `0x0000003f0000003f`, `0` |
-| `isp_mtile_base` | `0` |
-| `pds_bgnd0_base` | `0x00001e4000041000` |
-| `pds_bgnd3_sizeinfo` | `0x0100000000010001` |
-| `isp_render` | `3` |
-| `isp_rgn` | `0` |
+| not written | **no fault, no `PIXELBE_END_RENDER`**; the pipe never finishes (watchdog) |
+| written | **write to address 0**, tag `0x2B1`, `REQ_STATUS 0x0002b10000000000` |
 
-Questions:
-- Which unit does tag `0x2B1` belong to (PBE, ISP, TPU…)?
-- Where does that unit take its destination address from? Is there a transfer register
-  the kick must program that is not in the spec's table (for example the PBE state
-  base, or the end-of-tile program's destination)?
-- What is the PBE register layout: are the 3 words per MRT in `pbe_wordx_mrty` written
-  to `0x1510 + 8·(3n+k)`, or as `WORD0_MRTn = 0x1510 + 8n` / `WORD1_MRTn = 0x1550 + 8n`?
-  The probe found exactly 16 writable 64-bit registers at `0x1510..0x1588`.
-- Is `0x0F20` really `ISP_MTILE_BASE`? Its writable mask is 16-byte aligned, while
-  Mesa's `ISP_MTILE_BASE` has bits 39:2. Should it be skipped when the host gives 0?
-- The TQ table lists `BCAST[0x0FD8]` without a value. What goes there?
+The host's words for `copy_ssbo_to_image_small` were `pbe_wordx_mrty = 0x0200007c96800000,
+0x0000003f0000003f, 0`. By the public Mesa `PBE_WORD0_MRT0` layout, these are format,
+stride and clip fields. **There is no 40-bit destination address in any of them.**
+`event_pixel_pds_info/code/data = 0x202 / 0x28A0 / 0x2880`.
+- If the destination really is in WORD0/WORD1, which bits hold it, and why is it absent
+  from these host words? Could it be that the host leaves the address to the
+  end-of-tile emit?
+- Are `0x0618/0x0620/0x0628` written by the transfer kick, and with which fields? The 3D
+  kick writes `0x0618 = 0x80`. Is `0x0618` a control register rather than the PDS code
+  address, and the code address taken from data + size?
+- Does the end-of-tile pixel-event task need anything else, such as a shared-register
+  allocation, the `0x4070` "control value" (which field?), or `0x0F10` (the TQ writes
+  `isp_render_origin`, the 3D writes 0)?
 
 ## Answered
 
@@ -55,5 +49,6 @@ Questions:
 | Q8 TQ_3D start | second launch write `BCAST[0x0F00] = 1`, mandatory BIF gate, `0x06B0` not written, completion on `PIXELBE_END_RENDER`. **Implemented: the pipe starts.** Output is still wrong, see Q12. | `docsClean/kick-compute-and-3d.md`; [E017](logRefs/E017-tq3d-launch-fault-at-zero.md) |
 | Q9 IRQ task | section-B routing is enough; end with `0x0B08 = 2` and a read-back; no "which DM" register. **Confirmed**: HW2 fires on every completion; E016 was a race. | `docsClean/boot-gpu-init.md` B′; [E018](logRefs/E018-irq-task-delivery.md) |
 | Q10 zero workgroups | no special case: one kick per command. **Confirmed**: `empty_workgroup_x/y/z` pass once no stuck job is left. | `docsClean/kick-compute-and-3d.md`; [E019](logRefs/E019-hwr-and-compute-basic-67.md) |
+| Q12 TQ address 0 | PBE two banks, `0x0FD8`, conditional `0x0F20`. **Implemented**, but the fault remains: see Q13. | `docsClean/kick-compute-and-3d.md`; [E020](logRefs/E020-tq3d-pbe-two-banks.md) |
 | Q11 HWR reset | SLC idle → partial renders off → SOFT_RESET pulse `0x13FFFC1D/0xFFEFFE00` → units re-init and BIF rebuild → discard → resume. **Implemented and working** (~0.28 ms). | `docsClean/hardware-recovery.md`; [E019](logRefs/E019-hwr-and-compute-basic-67.md) |
 | Q7 GPU units init, exec bases | PDS `0x0610` (found by experiment, [E009](logRefs/E009-pds-exec-base-0x0610.md)), USC `0x4008/0x4010/0x4028`; the full section-A sequence. `0x0FC8` (E012) is an ISP register. **Implemented: compute works.** | `docsClean/boot-gpu-init.md` A; [E013](logRefs/E013-gpu-units-init-compute-pass.md) |

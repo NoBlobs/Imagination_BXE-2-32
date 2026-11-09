@@ -15,8 +15,11 @@
 #define SOFT_RESET_HWR_LO           0x13FFFC1Du
 #define SOFT_RESET_HWR_HI           0xFFEFFE00u
 
-/* Longer than any sane job; well below the host's own job timeout. */
-#define HWR_TIMEOUT_MS              2000
+/*
+ * Watchdog: the context's max_deadline_ms (the mainline host sets 30 s; its
+ * own job timeout is 60 s).  2 s was too short for large dispatches (E020).
+ */
+#define HWR_TIMEOUT_DEFAULT_MS      30000
 
 static uint32_t hwr_counter;
 
@@ -88,10 +91,16 @@ void hwr_recover(uint32_t reason)
 void hwr_watchdog(void)
 {
 	uint64_t now = gpu_timer();
-	uint64_t limit = (uint64_t)g.timer_ticks_per_ms * HWR_TIMEOUT_MS;
 
 	for (uint32_t d = 0; d < DM_MAX; d++) {
-		if (dms[d].busy && now - dms[d].kick_time > limit) {
+		if (!dms[d].busy)
+			continue;
+		struct fwcommoncontext *ctx = fwptr(dms[d].ctx);
+		uint32_t ms = ctx && ctx->max_deadline_ms ? ctx->max_deadline_ms :
+			      HWR_TIMEOUT_DEFAULT_MS;
+		uint64_t limit = (uint64_t)g.timer_ticks_per_ms * ms;
+
+		if (now - dms[d].kick_time > limit) {
 			TRACE(SFID_HWR_1, d, dms[d].ctx);
 			hwr_recover(HWR_REASON_LOCKUP);
 			return;

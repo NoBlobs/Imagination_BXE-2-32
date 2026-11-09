@@ -183,6 +183,7 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define CR_ISP_RENDER_ORIGIN    0x0F10  /* cmd+0x4C */
 #define CR_ISP_CTL              0x0F38  /* public */
 #define CR_ISP_AA               0x0F30  /* cmd+0x58 */
+#define CR_ISP_TILES_IN_FLIGHT  0x0FD8
 #define CR_ZS_PAIR              0x0FA8
 #define CR_ZS_EXTRA             0x0F48
 #define CR_EVENT_PIXEL_PDS_INFO 0x0628  /* cmd+0x5C */
@@ -199,6 +200,9 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	const struct transfer_regs *r = &cmd->regs;
 	uint32_t slot, isp;
 
+#ifdef EXP_SLC_FLUSH_PER_KICK
+	slc_flush_inval();      /* E020: rule out stale SLC lines in the PDS/PBE data */
+#endif
 	bcast_write32(CR_FRAG_CTRL_COMMON, (1u << 8) | 1);   /* execute count 1, GPU 0 */
 
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_FRAG);
@@ -209,7 +213,8 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write64(CR_PDS_BGRND0_BASE, r->pds_bgnd0_base);
 	bcast_write64(CR_PDS_BGRND1_BASE, r->pds_bgnd1_base);
 	bcast_write64(CR_PDS_BGRND3_SIZEINFO, r->pds_bgnd3_sizeinfo);
-	bcast_write64(CR_ISP_MTILE_BASE, r->isp_mtile_base);
+	if ((r->isp_render & 3) == 2)           /* only for FAST_2D (spec, Q12) */
+		bcast_write64(CR_ISP_MTILE_BASE, r->isp_mtile_base);
 	bcast_write32(CR_ISP_RGN, r->isp_rgn);
 	bcast_write32(CR_ISP_ZLS_A, 0);
 	bcast_write32(CR_ISP_ZLS_B, 0xE4);
@@ -222,37 +227,40 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_ISP_MTILE_SIZE, r->isp_mtile_size);
 	bcast_write32(CR_ISP_RENDER_ORIGIN, r->isp_render_origin);
 	bcast_write32(CR_ISP_CTL, r->isp_ctl);
+	{
+		/* tiles in flight: min(ISP_CTL[15:12] + 1, 2) (spec, Q12) */
+		uint32_t tif = ((r->isp_ctl >> 12) & 0xF) + 1;
+
+		bcast_write32(CR_ISP_TILES_IN_FLIGHT, tif > 2 ? 2 : tif);
+	}
 	bcast_write32(CR_ISP_AA, r->isp_aa);
 	bcast_write32(CR_ZS_PAIR, 0x88888888);
 	bcast_write32(CR_ZS_PAIR + 4, 0x88888888);
 	bcast_write32(CR_ZS_EXTRA, 0);
 	bcast_write32(CR_ZS_EXTRA + 4, 0);
+#ifndef TQ_NO_EVENT_PDS
+	/*
+	 * Dropped from the updated TQ table, but without it the pixel pipe never
+	 * ends (2 s watchdog); with it the job fails fast on the address-0 write
+	 * (E020, Q13).  -DTQ_NO_EVENT_PDS follows the table literally.
+	 */
 	bcast_write32(CR_EVENT_PIXEL_PDS_INFO, r->event_pixel_pds_info);
 	bcast_write32(CR_EVENT_PIXEL_PDS_CODE, r->event_pixel_pds_code);
 	bcast_write32(CR_EVENT_PIXEL_PDS_DATA, r->event_pixel_pds_data);
-	/*
-	 * PBE: the probe (E008) shows 16 writable 64-bit registers at
-	 * 0x1510..0x1588 = 2 words x 8 MRTs, and the spec gives "one register
-	 * pair per render target" over 0x1510..0x1564 for a TQ (3 MRTs).
-	 * PBE_LAYOUT 1 (default): planar, WORD0_MRTn = 0x1510 + 8n and
-	 * WORD1_MRTn = 0x1550 + 8n, from command words 3n and 3n+1 (E017).
-	 * PBE_LAYOUT 0: the 9 command words written contiguously.
-	 */
-#ifndef PBE_LAYOUT
-#define PBE_LAYOUT 1
 #endif
-	if (PBE_LAYOUT == 0) {
-		for (uint32_t i = 0; i < 9; i++)
-			bcast_write64(CR_PBE_WORDS + 8 * i, r->pbe_wordx_mrty[i]);
-	} else {
-		for (uint32_t n = 0; n < 3; n++) {
-			bcast_write64(CR_PBE_WORDS + 8 * n, r->pbe_wordx_mrty[3 * n]);
-			bcast_write64(CR_PBE_WORDS + 0x40 + 8 * n, r->pbe_wordx_mrty[3 * n + 1]);
-		}
+	/*
+	 * PBE state = destination surface (spec answer to Q12): two banks,
+	 * WORD0 of render target n -> 0x1510 + 8n, WORD1 -> 0x1550 + 8n, taken
+	 * from consecutive pairs pbe_wordx_mrty[2n], [2n+1].
+	 */
+	for (uint32_t n = 0; n < 4; n++) {
+		bcast_write64(CR_PBE_WORDS + 8 * n, r->pbe_wordx_mrty[2 * n]);
+		bcast_write64(CR_PBE_WORDS + 0x40 + 8 * n, r->pbe_wordx_mrty[2 * n + 1]);
 	}
 	TRACE(SFID_DBG_7, (uint32_t)(r->pbe_wordx_mrty[0] >> 32), (uint32_t)r->pbe_wordx_mrty[0],
 	      (uint32_t)(r->pbe_wordx_mrty[1] >> 32), (uint32_t)r->pbe_wordx_mrty[1],
 	      (uint32_t)(r->pbe_wordx_mrty[2] >> 32), (uint32_t)r->pbe_wordx_mrty[2]);
+	TRACE(SFID_DBG_4, r->event_pixel_pds_info, r->event_pixel_pds_code, r->event_pixel_pds_data);
 	TRACE(SFID_DBG_9, (uint32_t)(r->isp_mtile_base >> 32), (uint32_t)r->isp_mtile_base,
 	      (uint32_t)(r->pds_bgnd0_base >> 32), (uint32_t)r->pds_bgnd0_base,
 	      (uint32_t)(r->pds_bgnd3_sizeinfo >> 32), (uint32_t)r->pds_bgnd3_sizeinfo,

@@ -38,5 +38,7 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E017](E017-tq3d-launch-fault-at-zero.md) | 2026-11-08 | TQ_3D with the `0x0F00` launch | **the 3D pipe starts**, then writes to address 0 (Q12) |
 | [E018](E018-irq-task-delivery.md) | 2026-11-08 | IRQ task delivery | HW2 fires on every completion; E016 was the poll winning a race |
 | [E019](E019-hwr-and-compute-basic-67.md) | 2026-11-08 | HWR + full compute group | recovery in ~0.28 ms; `compute.pipeline.basic` **67/82 pass**, 6 fail (images), 9 not supported |
+| [E020](E020-tq3d-pbe-two-banks.md) | 2026-11-08 | TQ_3D with the corrected Q12 table | PBE in two banks, tiles-in-flight, conditional mtile base: the write to address 0 remains; host PBE words carry no address (Q13) |
+| [E021](E021-watchdog-deadline-wider-compute.md) | 2026-11-08 | Watchdog and wider compute groups | 2 s killed a long job; now uses the context's `max_deadline_ms`; indirect_dispatch 24/24, builtin_var 11/11 |
 
 The raw data is in [data/](data/).

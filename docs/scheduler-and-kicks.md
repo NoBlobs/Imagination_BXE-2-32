@@ -160,23 +160,29 @@ in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
 
 1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101` and bind the BIF slot for DM 3
    (`CAT_BASE_INDEX` bits 10:8). The binding is mandatory before any ISP or PBE write.
-2. Program the transfer, ISP and PBE registers. `0x06B0` (PDS_BGRND2) is not written.
-   PBE: planar `WORD0_MRTn = 0x1510 + 8n`, `WORD1_MRTn = 0x1550 + 8n` (compile with
-   `PBE_LAYOUT=0` for contiguous).
+2. Program the transfer, ISP and PBE registers:
+   - `0x06B0` (PDS_BGRND2) is not written.
+   - `0x0F20` (`isp_mtile_base`) only when `(isp_render & 3) == 2`.
+   - `0x0FD8` = `min(ISP_CTL[15:12] + 1, 2)` (tiles in flight).
+   - PBE in two banks: `WORD0_MRTn = 0x1510 + 8n` and `WORD1_MRTn = 0x1550 + 8n`, from
+     `pbe_wordx_mrty[2n]`, `[2n+1]`.
+   - `event_pixel_pds_info/code/data → 0x0628/0x0618/0x0620` is still written; the knob
+     `TQ_NO_EVENT_PDS` disables it ([E020](logRefs/E020-tq3d-pbe-two-banks.md)).
 3. Launch with two writes: `ISP_RENDER = regs.isp_render`, then RMW `| 0x10`, then
    **`BCAST[0x0F00] = 1`**, the real launch and the last write.
 4. Completion: `PIXELBE_END_RENDER`; finish trace `MAIN_4` "3D Transfer finished".
 
-State ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)): the pipe starts, then writes to
-address 0 (Q12). HWR discards the job.
+State ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md), [E020](logRefs/E020-tq3d-pbe-two-banks.md)):
+the pipe starts, then the PBE writes to address 0 (Q13). HWR discards the job.
 
 ## MMU faults and hardware recovery (`hwr.c`)
 
 A recovery has two triggers:
 - `EVENT_STATUS.MMU_PAGE_FAULT`, seen by the IRQ task or by a poll. `kick_events()`
   first emits `HWR_80` with the MMU and request status.
-- The 2 s watchdog: `hwr_watchdog()`, run on every timer tick, finds a DM busy longer
-  than that.
+- The watchdog: `hwr_watchdog()`, run on every timer tick, finds a DM busy for longer
+  than its context's `max_deadline_ms` (30 s from the mainline host; fallback 30 s).
+  A fixed 2 s limit discarded legitimate long jobs ([E021](logRefs/E021-watchdog-deadline-wider-compute.md)).
 
 `hwr_recover()` then runs the spec's reset sequence:
 1. Hold scheduling: clear `HARDWARE_OK`, set `RESET_IN_PROGRESS`.

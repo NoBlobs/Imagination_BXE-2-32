@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `4d78b64a…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `79910dad…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -81,7 +81,8 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | Knob | Effect |
 |---|---|
 | `EXP_NO_EVENT_POLL` | the timer no longer polls `EVENT_STATUS`, so completions come from the MTS tasks only (E018) |
-| `PBE_LAYOUT=0` | contiguous PBE word layout for the TQ kick (default 1 = planar, E017) |
+| `TQ_NO_EVENT_PDS` | follow the updated TQ table literally: do not write `event_pixel_pds_*` (E020) |
+| `EXP_SLC_FLUSH_PER_KICK` | SLC flush and invalidate before every TQ kick (E020) |
 
 The exec-base and event-enable knobs of E009–E012 were removed once the spec gave the
 registers (`gpu_init.c`).
