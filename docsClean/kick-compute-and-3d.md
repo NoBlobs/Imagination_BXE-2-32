@@ -125,8 +125,11 @@ A partial render has no ZS load/store.
 - Pipe reset: `BCAST[ROGUE_CR_ISP_RENDER]` (`0x0F08`) `= 0`, `BCAST[0x0618] = 0x80`,
   `BCAST[0x0620]` = `cmd+0x80`, `BCAST[0x0628]` = `cmd+0x74`, `BCAST[0x0F10] = 0`,
   `BCAST[0x0FC8] = 0`, `BCAST[0x0FCC] = 0`.
-- Output/PBE: blocks `BCAST[0x1510 … 0x1564]` = `cmd+0xD0 …` (the `pbe_word` area of
-  `regs`), one register pair per render target (render-target arrays supported).
+- Output/PBE: same **two-bank** layout as the transfer kick (see "Output / PBE state"
+  below) — **WORD0 of render target *n* → `BCAST[0x1510 + 8·n]`, WORD1 → `BCAST[0x1550 + 8·n]`**
+  (8 targets; 16 writable 64-bit registers `0x1510…0x1588`). The source is the frag command's
+  `pbe_word[n][…]`; the firmware writes 2 words per target. Do **not** interleave as
+  `0x1510 + 8·(3n+k)`.
 
 ### E. Trace and watchdog
 
@@ -183,13 +186,44 @@ flag at `cmd+0xE0` bit 0).
 ### C. ISP and output
 
 - ISP (same registers as 3D): `BCAST[0x4070]` = control value,
-  `BCAST[0x4078/0x4080/0x4088/0x4090]` = `cmd+0x38 … +0x44`, `BCAST[0x3E40]` = `cmd+0x70`,
-  `BCAST[0x0F18]` = `cmd+0x48`, `BCAST[0x0F10]` = `cmd+0x4C`, `BCAST[0x0FD8]`,
-  `BCAST[ROGUE_CR_ISP_CTL]` (`0x0F38`), `BCAST[0x0F30]` = `cmd+0x58`.
+  `BCAST[0x4078/0x4080/0x4088/0x4090]` = the four `usc_clear_register*`, `BCAST[0x3E40]`,
+  `BCAST[0x0F18]`, `BCAST[0x0F10]`, `BCAST[ROGUE_CR_ISP_CTL]` (`0x0F38`) = `isp_ctl`,
+  `BCAST[0x0F30]`.
+- **`BCAST[0x0FD8]` = tiles-in-flight**, a small count `min((isp_ctl >> 12 & 0xF) + 1, 2)`
+  — **not an address** (this is the value the TQ table left blank).
+- **`isp_mtile_base` → `BCAST[0x0F20]`/`[0x0F24]` (64-bit), written only when
+  `(isp_render & 3) == 2`.** For `isp_render = 3` it is **correctly skipped**, so a host
+  `isp_mtile_base = 0` is harmless — do **not** write `0x0F20` unconditionally.
+- Background/end-of-tile PDS: `pds_bgnd0_base → BCAST[0x06A0]/[0x06A4]`,
+  `pds_bgnd1_base → BCAST[0x06A8]/[0x06AC]`, `pds_bgnd3_sizeinfo → BCAST[0x06B8]/[0x06BC]`.
 - **No ZS** (transfer has no depth/stencil): `BCAST[0x0FA8] = BCAST[0x0FAC] = 0x88888888`;
   `BCAST[0x0F48] = 0`, `BCAST[0x0F4C] = 0`.
-- Output/PBE: `BCAST[0x0628/0x0618/0x0620]` = `cmd+0x5C/0x60/0x64`; blocks
-  `BCAST[0x1510 … 0x1564]` = `cmd+0x98 …` (destinations).
+
+#### Output / PBE state — destination surface (answers Q12)
+
+The transfer's **destination address is encoded in the PBE state words**, written to **two
+register banks** (there is **no** separate "PBE dest base" register):
+
+| Register | Source | Role |
+|---|---|---|
+| `BCAST[0x1510 + 8·n]` (`+0`/`+4`) | `pbe_wordx_mrty[2·n]` | **PBE WORD0** of render target *n* |
+| `BCAST[0x1550 + 8·n]` (`+0`/`+4`) | `pbe_wordx_mrty[2·n + 1]` | **PBE WORD1** of render target *n* |
+
+- There are exactly **16 writable 64-bit registers**: WORD0 bank `0x1510…0x1548`, WORD1 bank
+  `0x1550…0x1588` (8 render targets). The firmware consumes **2 words per render target**,
+  as **consecutive** pairs of `pbe_wordx_mrty` (`[0,1]` → RT0, `[2,3]` → RT1, …). Although
+  the public struct reserves `ROGUE_PBE_WORDS_REQUIRED_FOR_TQS = 3` words per target, **the
+  firmware uses only 2 of them**; the 3rd is not written.
+- **This is the Q12 bug.** The layout is **not** `0x1510 + 8·(3n+k)` (3 interleaved words
+  per RT). If you write WORD1 to `0x1518` (the interleaved position), the real WORD1 register
+  `0x1550` stays 0 — and since the destination address lives in the PBE state, the PBE then
+  writes to **address 0** (the observed `REQ_STATUS` write to `0x0`). Write WORD0 to
+  `0x1510+8n` and WORD1 to `0x1550+8n` and the destination resolves correctly. For the
+  single-render-target `copy_ssbo_to_image` case, RT0 is `pbe_wordx_mrty[0]→0x1510`,
+  `pbe_wordx_mrty[1]→0x1550`.
+- **The faulting requester** (BIF tag of the write to 0) is the **PBE / pixel-emit path** —
+  the unit that writes the output surface — consistent with a zeroed PBE destination. There
+  is no additional destination register the kick must program beyond WORD0/WORD1 above.
 
 ### D. Trace, watchdog and trigger
 
