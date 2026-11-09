@@ -88,6 +88,11 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | `EXP_TA` | enable the experimental geometry kick (`geom.c`, E028) |
 | `EXP_DUMP_RENDER` | dump the host render structures of `GEOM`/`FRAG` commands to the debug trace (E027) |
 | `EXP_CANARY` | with `EXP_TA`: write canary VAs to unassigned address registers (E028) |
+| `EXP_HS_MODE=n` | with `EXP_TA`: PM handshakes `0x0250`/`0x0258` 0 = none, 1 = after the PM writes (default), 2 = around them (faults at 0) (E032) |
+| `EXP_PM_PAUSE` | with `EXP_TA`: write the global free-list bank inside `PM_PAGE_MANAGEOP = 1` (E032) |
+| `EXP_PM_BCAST` | with `EXP_TA`: write the PM free-list registers through the broadcast bank (E032) |
+| `EXP_CLK_ON` | with `EXP_TA`: force every `CLK_CTRL` field from AUTO to ON before the PM writes (E032) |
+| `EXP_SP32` | with `EXP_TA`: 32-bit-only writes of `0x20C0` and `0x0224` (E032) |
 | `EXP_MLIST_REG`, `EXP_VDM_STATE_REG`, `EXP_TA_STATE_REG` | override the guessed register offsets used by `geom.c` (0 = do not write) |
 | `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |
 | `EXP_NO_PDS_BASE` | leave the PDS exec base at 0, to reproduce the E006 page fault (E025) |

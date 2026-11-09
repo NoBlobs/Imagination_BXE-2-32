@@ -50,5 +50,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E029](E029-ta-pm-registers-from-answers.md) | 2026-11-09 | TA with the Q16b/Q16c answers | local FL counts and geometry constants applied, `0x0420` counts kicks as in the original; still no PM allocation; global-FL guess in the 0x2000 block changes nothing (Q16e) |
 | [E030](E030-ta-global-freelist-pb-base.md) | 2026-11-09 | TA with the global FL bank and `CONTEXT_PB_BASE` | all identified PM registers programmed; still no allocation; `0x0D00 = 0x0F` is the inverse of the original's running state; PM catalogue setup is the remaining gap (Q16f) |
 | [E031](E031-pm-live-stack-pointers.md) | 2026-11-09 | Global SP `0x2088` and live counters | these live registers ignore writes and stay 0; PM catalogues stay 0 too: the PM sees empty free lists (Q16g) |
+| [E032](E032-pm-live-sp-load-variants.md) | 2026-11-09 | Q16g applied; load variants of the PM live SPs | none loads `0x20C8`/`0x0348`; `0x02A8` acks `PM_PAGE_MANAGEOP`; writes between the handshakes fault at address 0 (Q16h) |
 
 The raw data is in [data/](data/).

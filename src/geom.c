@@ -96,8 +96,8 @@ static void geom_snapshot(uint32_t tag)
 {
 	TRACE(SFID_DBG_2, 0xE0280000u | tag);
 	TRACE(SFID_DBG_9, cr_read32(CR_PM_FL_STACKTOP), cr_read32(CR_PM_ALIST_SP),
-	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x2080),
-	      cr_read32(0x0398), cr_read32(CR_EVENT_STATUS), cr_read32(0x0D00));
+	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x20C8),
+	      cr_read32(0x0348), cr_read32(CR_EVENT_STATUS), cr_read32(0x0D00));
 }
 
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
@@ -121,29 +121,80 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_GEOM);
 	bif_set_index(DM_GEOM, slot);
 
-	/* B. load the HWRTData into PM context 0 (partly known, see header) */
+	/*
+	 * B. load the HWRTData into PM context 0 (answers to Q16b-Q16g).
+	 * E032: the PM state is written between the two handshakes (pause, then
+	 * resume), as phase B describes them ("pause and resume while the state
+	 * changes"); written before them, the live stack pointers stayed 0.
+	 */
+#ifdef EXP_PM_BCAST   /* E032: PM loads through the broadcast bank */
+#define pm_w64 bcast_write64
+#define pm_w32 bcast_write32
+#else
+#define pm_w64 cr_write64
+#define pm_w32 cr_write32
+#endif
+#ifndef EXP_HS_MODE
+#define EXP_HS_MODE 1   /* 0 none, 1 after the PM writes (spec order D), 2 around them (E032: fails) */
+#endif
+#if EXP_HS_MODE == 2
+	TRACE(SFID_DBG_3, 0xE0280B00u, cr_read32(CR_EVENT_STATUS));
+	cr_write32(CR_PM_HANDSHAKE_A, 1);
+	cr_poll32(CR_PM_HANDSHAKE_A, 1, 1, 10000);
+	TRACE(SFID_DBG_3, 0xE0280B01u, cr_read32(CR_PM_HANDSHAKE_A));
+#endif
+#ifdef EXP_CLK_ON
+	/* E032: every AUTO clock forced ON (0x2 -> 0x1 per field) */
+	cr_write64(0x0000, 0x0015550015115555ull);
+	TRACE(SFID_DBG_4, 0xE0280B30u, cr_read32(0x0008), cr_read32(0x000C));   /* CLK_STATUS */
+#endif
+	/* 0x0240 = base of the general heap: the first change at a first load (Q16g) */
+	cr_write64(0x0240, 0x8000000000ull);
 	cr_write64(CR_PM_VHEAP_TABLE, rd64(hwrt, HWRT_VHEAP_TABLE));
-	cr_write64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));
+	pm_w64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));
 	/* 0x0220 reads 0 with the original firmware (Q16b answer): leave it 0 */
-	cr_write32(CR_PM_FL_STACKTOP - 4, 0);
-	cr_write32(CR_PM_FL_STACKTOP, rd32(fl_local, FL_STACK_TOP));
+	#ifdef EXP_SP32
+	pm_w32(CR_PM_FL_STACKTOP, rd32(fl_local, FL_STACK_TOP));
+#else
+	pm_w64(CR_PM_FL_STACKTOP - 4, (uint64_t)rd32(fl_local, FL_STACK_TOP) << 32);
+#endif
 	{
 		/*
-		 * Global free list of PM context 0 (answer to Q16e): bank at 0x2078,
+		 * Global free list of PM context 0 (answers to Q16e-Q16g),
 		 * see the bank layout below.
-		 * The stack pointer is 0x2088 (answer to Q16f; 0x2080 was wrong).
+		 * see the bank layout below.
 		 */
 		const uint8_t *fl_global = fwptr(rd32(hwrt, HWRT_FREELISTS + 4));
 
 		if (fl_global) {
-			/* bank 0: +0x00 base, +0x10 live SP, +0x18/+0x1C counts at the last
-			 * load/store, +0x20/+0x28 live allocated PB/MMU pages (Q16f answer) */
-			cr_write64(0x2078, rd64(fl_global, FL_CURRENT_DEV_ADDR));
-			cr_write32(0x2088, rd32(fl_global, FL_STACK_TOP));
-			cr_write32(0x2090, rd32(fl_global, 32));
-			cr_write32(0x2094, rd32(fl_global, 36));
-			cr_write32(0x2098, rd32(fl_global, 32));
-			cr_write32(0x20A0, rd32(fl_global, 36));
+#ifdef EXP_PM_PAUSE
+			/* E032: the grow update loads the bank inside PM_PAGE_MANAGEOP = 1 */
+			cr_write32(0x02A0, 1);
+			for (uint32_t i = 0; i < 1000 && !(cr_read32(0x02A8) & 1); i++)
+				;
+			TRACE(SFID_DBG_4, 0xE0280B20u, cr_read32(0x02A0), cr_read32(0x02A8));
+#endif
+			/*
+			 * PM context 0 (geometry) uses the bank at 0x20B8 (answer to Q16g;
+			 * the Q16e table had the banks swapped): +0x00 base, +0x08 stack
+			 * top (writing it loads the read-only live SP at +0x10),
+			 * +0x18/+0x1C page counts at load.
+			 */
+			pm_w64(0x20B8, rd64(fl_global, FL_CURRENT_DEV_ADDR));
+			#ifdef EXP_SP32
+			pm_w32(0x20C0, rd32(fl_global, FL_STACK_TOP));   /* low word only (E032) */
+#else
+			pm_w64(0x20C0, rd32(fl_global, FL_STACK_TOP));
+#endif   /* 64-bit: high word commits? (E032) */
+			pm_w32(0x20D0, rd32(fl_global, 32));
+			pm_w32(0x20D4, rd32(fl_global, 36));
+#ifdef EXP_PM_PAUSE
+			TRACE(SFID_DBG_4, 0xE0280B21u, cr_read32(0x20C8), cr_read32(0x02A8));
+			cr_write32(0x02A0, 0);
+			for (uint32_t i = 0; i < 1000 && (cr_read32(0x02A8) & 1); i++)
+				;
+			TRACE(SFID_DBG_4, 0xE0280B22u, cr_read32(0x20C8), cr_read32(0x02A8));
+#endif
 		}
 		/* CONTEXT_PB_BASE (0x02B0) = 3 at the geometry load (answer to Q16e) */
 		cr_write32(0x02B0, 3);
@@ -159,13 +210,31 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	/* 0x0270/0x02C0 are read-only (E008); the writable neighbours load the SPs */
 	cr_write64(CR_PM_ALIST_SP + 8, rd64(hwrt, HWRT_ALIST_SP));
 	cr_write32(CR_PM_MLIST_SP + 8, rd32(hwrt, HWRT_MLIST_SP));
-	TRACE(SFID_DBG_3, 0xE0280B00u, cr_read32(CR_EVENT_STATUS));     /* before handshakes */
-	cr_write32(CR_PM_HANDSHAKE_A, 1);
-	cr_poll32(CR_PM_HANDSHAKE_A, 1, 1, 10000);
-	TRACE(SFID_DBG_3, 0xE0280B01u, cr_read32(CR_EVENT_STATUS));     /* after 0x250 */
+
+#ifdef EXP_CANARY
+	{
+		/*
+		 * E028 canaries: distinct unmapped GPU VAs (4 GiB + k * 16 MiB) in the
+		 * unassigned 40-bit candidates; the fault address then names the register.
+		 */
+		static const uint16_t cand[] = { 0x0218, 0x2078, 0x02E0, 0x0230 };
+
+		for (uint32_t k = 0; k < sizeof(cand) / sizeof(cand[0]); k++)
+			cr_write64(cand[k], 0x0100000000ull + ((uint64_t)(k + 1) << 24));
+	}
+#endif
+	TRACE(SFID_DBG_4, 0xE0280B10u, cr_read32(0x20C8), cr_read32(0x0348));   /* live SPs before resume */
+#if EXP_HS_MODE == 2
 	cr_write32(CR_PM_HANDSHAKE_B, 1);
 	cr_poll32(CR_PM_HANDSHAKE_B, 1, 0, 10000);
-	TRACE(SFID_DBG_3, 0xE0280B02u, cr_read32(CR_EVENT_STATUS));     /* after 0x258 */
+	TRACE(SFID_DBG_5, 0xE0280B02u, cr_read32(0x20C8), cr_read32(0x0348), cr_read32(CR_PM_HANDSHAKE_B));
+#elif EXP_HS_MODE == 1
+	cr_write32(CR_PM_HANDSHAKE_A, 1);
+	cr_poll32(CR_PM_HANDSHAKE_A, 1, 1, 10000);
+	cr_write32(CR_PM_HANDSHAKE_B, 1);
+	cr_poll32(CR_PM_HANDSHAKE_B, 1, 0, 10000);
+	TRACE(SFID_DBG_5, 0xE0280B02u, cr_read32(0x20C8), cr_read32(0x0348), cr_read32(CR_PM_HANDSHAKE_B));
+#endif
 
 	/* C. geometry registers (observed by the spec, matched by value in E027) */
 	cr_write32(CR_PPP_CTRL, rd32(regs, 28));
@@ -203,18 +272,7 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		if (EXP_TA_STATE_REG)
 			cr_write64(EXP_TA_STATE_REG, rd64(st, 16));
 	}
-#ifdef EXP_CANARY
-	{
-		/*
-		 * E028 canaries: distinct unmapped GPU VAs (4 GiB + k * 16 MiB) in the
-		 * unassigned 40-bit candidates; the fault address then names the register.
-		 */
-		static const uint16_t cand[] = { 0x0230, 0x0240, 0x02E0, 0x0CC0 };
 
-		for (uint32_t k = 0; k < sizeof(cand) / sizeof(cand[0]); k++)
-			cr_write64(cand[k], 0x0100000000ull + ((uint64_t)(k + 1) << 24));
-	}
-#endif
 	/* new (non-resumed) kick: the observed 0xCE0 = 1 */
 	cr_write32(CR_GEOM_CE0, 1);
 

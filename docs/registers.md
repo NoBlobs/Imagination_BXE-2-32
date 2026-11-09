@@ -70,21 +70,23 @@ The firmware reaches registers in three ways:
 | `0x0418` | O, E | `VDM_CALL_STACK_POINTER` ← geometry context state `+8` (call stack init) | value match |
 | `0x0428` | E | candidate `VDM_CONTEXT_STATE_BASE` | guess (E008 mask) |
 | `0x0210` / `0x0218` | S, O | local free list address (one per PM context) | spec observation |
-| `0x0220` / `0x0224` | O | `0x0220` reads 0 with the original firmware; `0x0224` = local free-list stack top | spec observation |
+| `0x0220` / `0x0224` | O | `0x0220` reads 0 with the original firmware; `0x0224` = local free-list loaded stack top | spec observation |
+| `0x0240` / `0x0244` | O | `0x80_0000_0000` (general heap base), the first change at a first load | spec observation (Q16g) |
+| `0x0348` / `0x0350` | O, E | local free list **live** stack pointer, PM context 0 / 1; stays 0 on our firmware (E032) | spec (Q16g) + E032 |
 | `0x0398` / `0x039C` | O | local free list allocated page count / allocated MMU page count | spec observation |
-| `0x02A0` | O | `PM_PAGE_MANAGEOP`: 1 pauses TA allocation while the PM state changes | spec observation (trace) |
+| `0x02A0` / `0x02A8` | O, E | `PM_PAGE_MANAGEOP`: 1 pauses TA allocation while the PM state changes; `0x02A8` acks it within one read | spec observation (trace) + E032 |
 | `0x02D8` / `0x02E0` | O, E | MLIST base (`pm_mlist_dev_addr`) of PM context 0 / 1 | spec observation + E028 guess |
 | `0x0420` | O, E | geometry kick counter (+1 per kick) | spec + E029 |
 | `0x02B0` | O | `CONTEXT_PB_BASE`: `3` at the geometry load, `0` at the fragment load | spec observation |
-| `0x2078` / `0x20B8` | O | global free list bank of PM context 0 / 1 (stride `0x40`), `+0x00` = base | spec observation |
-| `0x2080` / `0x20C0` | O | `+0x08` of the global bank: not identified (`0x20`, `0x108`, `0x109`) | spec observation |
-| `0x2088` / `0x20C8` | O, E | global free list **live** stack pointer; read-only for the firmware (E031) | spec + E031 |
+| `0x20B8` / `0x2078` | O | global free list bank of PM context 0 (geometry) / 1 (fragment), stride `0x40`, `+0x00` = base (corrected by Q16g) | spec observation |
+| `0x20C0` / `0x2080` | O, E | `+0x08`: stack pointer to load; in the original the live `+0x10` follows in the same sample, on ours it does not (E032) | spec (Q16g) + E032 |
+| `0x20C8` / `0x2088` | O, E | global free list **live** stack pointer, context 0 / 1; read-only (E031) | spec + E031 |
 | `0x2090` / `0x2094` | O | global PB / MMU page counts at the last load/store | spec observation |
 | `0x2098` / `0x20A0` | O, E | global **live** allocated PB / MMU pages; read 0 after a write (E031) | spec + E031 |
 | `0x0C30/0x0C34`, `0x0C48`, `0x0C70`, `0x0C90/0x0C94`, `0x0CA0` | O | constants `2/3`, `8`, `3`, `0x3089705F` ×2, `0x10` | spec observation |
 | `0x0D00` | O, E | status: `0x3F` idle, `0x0F` while our stalled TA runs | observed |
 | `0x0248` | O | `PM_VHEAP_TABLE` ← `vheap_table_dev_addr` | spec observation |
-| `0x0250` / `0x0258` | S | PM handshakes | spec |
+| `0x0250` / `0x0258` | S, E | PM handshakes; PM writes made while `0x0250 = 1` fault at address 0 (E032) | spec + E032 |
 | `0x0270`/`0x0278`/`0x0280`, `0x02C0`/`0x02C8`/`0x02D0` | O, E | ALIST / MLIST stack pointers (`0x0278`/`0x02C8` writable) | partly |
 | `0x0C08` / `0x0C10` | O, E | `TE_MTILE1/2` ← `te_mtile1/2` | value + mask + Mesa |
 | `0x0C18` | O, E | `TE_SCREEN` ← `te_screen` | value + mask + Mesa |

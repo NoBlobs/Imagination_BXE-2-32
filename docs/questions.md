@@ -28,6 +28,29 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q16h — What makes the PM copy `+0x08`/`0x0224` into its live stack pointers? (blocking)
+
+With the Q16g answer applied ([E032](logRefs/E032-pm-live-sp-load-variants.md)): `0x0240 =
+0x80_0000_0000`, local `0x0210`/`0x0224`, geometry bank `0x20B8`/`0x20C0`/`0x20D0`/`0x20D4`,
+`0x02B0 = 3`, MLIST, VHeap. The values land, but **`0x20C8` and `0x0348` stay 0**, read by
+the firmware itself right after the writes. Tried without effect: handshakes after the
+writes, no handshakes, `PM_PAGE_MANAGEOP` pause around the writes (`0x02A8` acks it), the
+broadcast bank, all clocks forced ON, 32-bit writes. With the PM writes **between**
+`0x0250 = 1` and `0x0258 = 1`, the `0x0258` poll fails and a read at address 0 faults
+(request status `0x0011B000_00000000`: `TAG_SB 4`, `TAG_ID 0x1B`).
+
+1. Before the **first** geometry load after boot, does the original write anything to the
+   PM that is not in the per-kick list: in GPU init, at the first kick, or at a freelist
+   `FREELISTS_RECONSTRUCTION`/init command? A register sweep of `0x0200–0x03FC` and
+   `0x2000–0x20FC` **right after boot, before any job**, compared with ours (we can send
+   ours), would show it.
+2. Is there a PM register that must be non-zero for the live registers to load, for example
+   a PM context select, a "PM enable", the PB size (`0x2090`… total pages), or the
+   `0x02F8` counter the answer saw start counting?
+3. Is the `0x20C8` change in the same sample as the `0x20C0` change also seen when
+   `0x0250`/`0x0258` are skipped? What is the requester with `TAG_SB 4` / `TAG_ID 0x1B`
+   (which unit reads at the base address)?
+
 #### Q16g — How does the firmware load the free lists into the PM's live state? (blocking)
 
 After the Q16f answer ([E031](logRefs/E031-pm-live-stack-pointers.md)):
