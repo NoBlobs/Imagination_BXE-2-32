@@ -117,9 +117,15 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 
 	TRACE(SFID_DBG_3, 0xE0280A00u, cr_read32(CR_EVENT_STATUS));     /* at entry */
 	/* A. preconditions */
+#ifndef EXP_NO_F320
 	bcast_write32(CR_MULTICORE_GEOM_CTRL, 1);
+#endif
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_GEOM);
+#ifndef EXP_IDX_AFTER
 	bif_set_index(DM_GEOM, slot);
+#else
+	bif_set_index(DM_GEOM, 0);   /* E034: TA index bound only after the PM writes */
+#endif
 
 	/*
 	 * B. load the HWRTData into PM context 0 (answers to Q16b-Q16g).
@@ -151,6 +157,15 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	/* idle PM values to compare with the original's after-init read (Q16h) */
 	TRACE(SFID_DBG_8, 0xE0280B40u, cr_read32(0x20F8), cr_read32(0x03D0), cr_read32(0x03D4),
 	      cr_read32(0x0388), cr_read32(0x03C0), cr_read32(0x03E0));
+#ifdef EXP_UNIT_EXTRA
+	/* E034: values that change with the unit init at the original's first load (Q16i) */
+	cr_write32(0x1500, 0x80);
+	cr_write32(0x1780, 0x21);
+	cr_write32(0x1788, 0x20);
+	cr_write32(0x178C, 0x20);
+	cr_write32(0x0FA0, 0x88);
+	cr_write32(0x17B8, 0xA);
+#endif
 #ifdef EXP_0388
 	cr_write32(0x0388, 1);   /* E033: 1 after init in the original; our TQ kick zeroes it */
 #endif
@@ -247,6 +262,12 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		for (uint32_t k = 0; k < sizeof(cand) / sizeof(cand[0]); k++)
 			cr_write64(cand[k], 0x0100000000ull + ((uint64_t)(k + 1) << 24));
 	}
+#endif
+#ifdef EXP_IDX_AFTER
+	TRACE(SFID_DBG_4, 0xE0280B11u, cr_read32(0x20C8), cr_read32(0x0348));
+	bif_set_index(DM_GEOM, slot);
+	for (volatile uint32_t i = 0; i < 2000; i++)
+		;
 #endif
 	TRACE(SFID_DBG_4, 0xE0280B10u, cr_read32(0x20C8), cr_read32(0x0348));   /* live SPs before resume */
 #if EXP_HS_MODE == 2

@@ -89,6 +89,8 @@ The firmware reaches registers in three ways:
 | `0x20F8` | O, E | 0 → 1 at the first load after boot, then stays 1; our init writes it 1 at boot | spec (Q16h) + E033 |
 | `0x03D0` / `0x03D4` | O, E | per-load bits: geometry bit 8 / bit 0, fragment bit 16 / bit 8 ("PM context loaded"?); plain storage on ours | spec (Q16h) + E033 |
 | `0x0388` | O, E | 1 after init and after jobs in the original; our TQ kick writes 0 (Q13 table) | spec + E033 |
+| `0xF320` | P, O | `MULTICORE_GEOMETRY_CTRL_COMMON`: stays 0 in the original (Q16i); our earlier write of 1 removed in E034 experiments | mainline defs + spec |
+| `0x1500`, `0x1780`, `0x1788`/`0x178C`, `0x0FA0`, `0x17B8` | O | change with the unit init at the first load: `0x80`, `0x40`→`0x21`, `0x20`/`0x20`, `0x88`, `0xA` | spec (Q16i) |
 | `0x0250` / `0x0258` | S, E | PM handshakes; PM writes made while `0x0250 = 1` fault at address 0 (E032) | spec + E032 |
 | `0x0270`/`0x0278`/`0x0280`, `0x02C0`/`0x02C8`/`0x02D0` | O, E | ALIST / MLIST stack pointers (`0x0278`/`0x02C8` writable) | partly |
 | `0x0C08` / `0x0C10` | O, E | `TE_MTILE1/2` ← `te_mtile1/2` | value + mask + Mesa |

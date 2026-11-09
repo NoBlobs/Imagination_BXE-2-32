@@ -28,7 +28,32 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16i — What action copies the loaded free list into the PM's live stack pointers? (blocking)
+#### Q16j — The exact register writes from `Activate MemCtx` to `Load Freelist` (blocking)
+
+With the Q16i answer applied ([E034](logRefs/E034-pm-copy-q16i-variants.md)), our register
+state at the geometry kick matches every value the spec observed in the original:
+- `0xF320` = 0;
+- the unit values of the first load (`0x1500`, `0x1780`, `0x1788`, `0x178C`, `0x0FA0`,
+  `0x17B8`);
+- `CAT_BASE1` and the TA field of `CAT_BASE_INDEX`, written before or after the PM writes;
+- `0x20F8`, `0x0240`, `0x03D0`/`0x03D4`;
+- local and global free lists, base first;
+- `0x02B0`.
+
+The live stack pointers `0x0348`/`0x20C8` still stay 0. Sampling has shown that the missing
+step changes no register value. Sampling cannot settle this; it needs the original's
+**write sequence**, in the spec's usual form (offset, value or value source, order, polls):
+1. Every register write and poll from `PM running primary config` (trace PM 30) to
+   `CONTEXT_PB_BASE set to …` (RTD 3) at a first geometry load. Include **writes of a value
+   the register already holds**, writes to registers outside the sampled ranges, and any
+   read whose result is waited on.
+2. In particular, what the "primary config" selection step writes (PM 30 / PM 31), and
+   whether the free-list registers are written through a different bank or alias (for
+   example a per-config window) rather than at `0x0210`/`0x20B8` directly.
+3. If the copy is triggered by a write to a register we already write (a "commit" or
+   "load" bit), which register, which bit, and in what order relative to `+0x00`/`+0x08`.
+
+#### Q16i — What action copies the loaded free list into the PM's live stack pointers? (answered in part, see E034)
 
 With the Q16h answer applied ([E033](logRefs/E033-pm-first-load-flags.md)), our PM state
 after init equals the original's: the same non-zero list, with `0x20F8` going 0 → 1 at the

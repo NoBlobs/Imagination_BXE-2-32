@@ -52,5 +52,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E031](E031-pm-live-stack-pointers.md) | 2026-11-09 | Global SP `0x2088` and live counters | these live registers ignore writes and stay 0; PM catalogues stay 0 too: the PM sees empty free lists (Q16g) |
 | [E032](E032-pm-live-sp-load-variants.md) | 2026-11-09 | Q16g applied; load variants of the PM live SPs | none loads `0x20C8`/`0x0348`; `0x02A8` acks `PM_PAGE_MANAGEOP`; writes between the handshakes fault at address 0 (Q16h) |
 | [E033](E033-pm-first-load-flags.md) | 2026-11-09 | Q16h first-load PM registers | idle PM state equals the original except `0x20F8`; with `0x20F8`/`0x03D0`/`0x03D4` written the live SPs still stay 0 (Q16i) |
+| [E034](E034-pm-copy-q16i-variants.md) | 2026-11-09 | Q16i answer applied | `0xF320` back to 0, unit values and catalogue index matched; the live SPs still stay 0; the missing step changes no value (Q16j) |
 
 The raw data is in [data/](data/).
