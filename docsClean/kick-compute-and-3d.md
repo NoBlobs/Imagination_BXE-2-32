@@ -108,18 +108,30 @@ The kick with the **most registers** (ISP, ZS and output configuration).
 
 | Register | Data |
 |---|---|
-| `BCAST[0x4070/0x4078/0x4080/0x4088/0x4090]` | `cmd+0x38 … +0x48` (start of `regs`: pixel output control and clear registers) |
-| `BCAST[0x40A0]` (byte) | `cmd+0x7C` |
-| `BCAST[0x0F20/0x0F24]` | 64-bit address |
-| `BCAST[0x3E40]`, `BCAST[0x0F18]` | render target state |
+| `BCAST[0x4070]` | `usc_pixel_output_ctrl` (**O**: observed equal) |
+| `BCAST[0x4078/0x4080/0x4088/0x4090]` | `usc_clear_register[0..3]` |
+| `BCAST[0x40A0]` (byte) | `view_idx` (`cmd+0x7C` = `regs+68`, public offset) |
+| `BCAST[0x0F20/0x0F24]` | `rogue_fwif_hwrtdata.rgn_header_dev_addr` (**O**: observed equal to the trace "TE Region headers base") |
+| `BCAST[0x3E40]`, `BCAST[0x0F18]` | render target state. Observed `0x3E40 = 0x00FF_00FF` (255/255 for a 256×256 target) and `0x0F18 = 0x0010_0010`; sources `TO CONFIRM` (`rogue_fwif_hwrtdata_common` candidates) |
 
 ### C. ZS load/store
 
 A partial render has no ZS load/store.
 
 - `BCAST[0x0FA8/0x0FAC]`: ZS pair (from the render target state);
-- `BCAST[0x0FB0 … 0x0FBC]` = `cmd+0x98 … +0xA4`; `BCAST[0x0F80]` = `cmd+0x5C`;
-  `BCAST[0x0F30]` = `cmd+0x64`; `BCAST[0x0F28]` = render target state.
+- `BCAST[0x0FB0]`/`[0x0FB4]` = `isp_scissor_base` and `BCAST[0x0FB8]`/`[0x0FBC]` =
+  `isp_dbias_base` (`cmd+0x98 … +0xA4`; **O**: both observed equal). These are **not**
+  `isp_zlsctl`/`isp_zload_store_base`; the ZLS fields are elsewhere (`TO CONFIRM`).
+- `BCAST[0x0F80]` = `isp_bgobjdepth` (**O**); `BCAST[0x0F30]` = `isp_aa` (`cmd+0x64`);
+  `BCAST[0x0F28]` = render target state.
+- `BCAST[0x17A0]`/`[0x17A4]` = `tpu_border_colour_table` (**O**; the same register the
+  geometry kick writes).
+
+> Source of the field names: their offsets in the public `rogue_fwif_frag_regs` (check
+> header), plus a black-box observation of one fragment job (open firmware v1.1, confirmed
+> with v1.0; see [kick-geometry-ta](kick-geometry-ta.md)). Fields not listed here are `PENDING`. The
+> observation could not place them because the read-back transfer that follows a render
+> overwrites part of the 3D registers.
 
 ### D. ISP pipe and output
 
@@ -315,6 +327,15 @@ with the observations but unverified:
   plus `event_pixel_pds_data`, against the address the host gave);
 - the host's upload is not visible to the GPU when the task runs;
 - a conditional register from the table was written outside its condition.
+
+**Fields the transfer kick reads (answers Q25).** The table above is the whole kick. In
+particular the firmware does **not** read `isp_xtp_pipe_enable` (feature
+`S7_TOP_INFRASTRUCTURE` is absent), reads no `flags` bit except bit 1
+(`ROGUE_TRANSFER_FLAGS_SINGLE_CORE`) and bit 0 (no public name; it changes how the DM 3
+memory context is bound, `TO CONFIRM` in what way), and always writes the PBE words of render targets 0–2 (six of
+the nine `pbe_wordx_mrty` entries), whatever the number of targets in use. A transfer that
+completes but produces wrong bytes is therefore not explained by an ignored transfer field.
+Look at what the host puts in the fields and in the end-of-tile program instead.
 
 **Completion:** a TQ_3D ends on **`PIXELBE_END_RENDER`** (`ROGUE_CR_EVENT_STATUS` bit 3), the
 same event as a normal 3D render. `0x06B0` is **not** written by the transfer kick.

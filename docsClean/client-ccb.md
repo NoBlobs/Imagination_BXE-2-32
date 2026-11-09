@@ -71,6 +71,26 @@ At most `ROGUE_FWIF_CCB_CMD_MAX_UFOS` (**64**) UFOs per command. The UFO that fa
 stored in `fwcommoncontext.last_failed_ufo` so it can be re-evaluated cheaply on the next
 BG task.
 
+### Paired geometry + fragment jobs (answers Q22)
+
+How the mainline host expresses "the fragment must wait for its geometry" (**P**,
+`pvr_queue.c`, `pvr_cccb.c`):
+
+- The fragment job's cCCB gets a **`FENCE_PR`** command whose UFO is the geometry queue's
+  timeline UFO, with the geometry job's completion value. So the wait is a **cCCB fence**
+  (signed `>=`, see above), not a dependency the firmware has to discover by itself.
+- The geometry command's `partial_render_geom_frag_fence` is set to the same timeline UFO
+  with the value **one below** the geometry job's completion value. The firmware uses it
+  for the partial-render check (trace SPM id 66 `OOM TA/3D PR Check: … requires …`, see
+  [partial-render-spm](partial-render-spm.md)).
+- Both cCCBs are then started together with one KCCB **`COMBINED_GEOM_FRAG_KICK`** (117),
+  which carries a geometry kick and a fragment kick (`fill_cmd_kick_data` for each). For a
+  partial-render fragment the host attaches no cleanup resources to the fragment half.
+
+`TO CONFIRM` (not established by the analysis): whether the firmware, in addition to this
+fence, holds the fragment kick on the HWRTData `state` while the geometry of the same
+HWRTData is running.
+
 The KCCB `FORCE_UPDATE` command forces checkpoints still `PVR_SYNC_CHECKPOINT_ACTIVE`
 (`0xAC1`) in a blocked fence to errored (`0xEFF`), unblocking it.
 

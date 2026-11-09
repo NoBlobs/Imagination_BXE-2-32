@@ -72,6 +72,28 @@ Authoritative list: `enum rogue_fwif_kccb_cmd_type` in `pvr_rogue_fwif.h`. A com
 firmware does not implement must still be consumed and marked `CMD_EXECUTED`, so the host
 does not stall.
 
+### Commands the mainline host sends (answers Q26)
+
+The mainline driver (**P**, all of `drivers/gpu/drm/imagination/*.c`) only ever sends:
+`KICK`, `COMBINED_GEOM_FRAG_KICK`, `MMUCACHE`, `CLEANUP`, `POW`, `FREELIST_GROW_UPDATE`,
+`FREELISTS_RECONSTRUCTION_UPDATE`, `HEALTH_CHECK` and `LOGTYPE_UPDATE`. Every other command
+in the table is never sent on this stack. For mainline compatibility it is enough to consume
+those commands and answer `CMD_EXECUTED`.
+
+What the public header says about the commands asked about in Q26:
+
+| id | Command | Public description | On this GPU / stack |
+|---|---|---|---|
+| 114 | `NOTIFY_WRITE_OFFSET_UPDATE` | "the host has added more data to a **CDM2 circular buffer**" | concerns the CDM user-mode queue (`cdm_cb*` fields, feature `CDM_USER_MODE_QUEUE`), which this GPU does not have. It is **not** a cCCB write-offset notification. Not sent by mainline. |
+| 118 | `OS_ONLINE_STATE_CONFIGURE` | a guest OS has come online / offline | virtualisation only; not sent by mainline |
+| 103 | `BP` | configure a shader breakpoint | not sent by mainline |
+| 200 | `REGCONFIG` | native/host-OS-only command | not sent by mainline |
+| 213 | `PHR_CFG` | configure periodic hardware reset behaviour | not sent by mainline |
+| 215 | `WDG_CFG` | configure the safety firmware watchdog | not sent by mainline |
+
+Their full firmware-side behaviour is **not** described in this spec (`PENDING`). It is
+not needed to interoperate with mainline.
+
 ### Values observed on the board (O)
 
 `0x2abc0065` (KICK), `0x2abc0066` (MMUCACHE), `0x2abc006a` (CLEANUP), each answered in its
