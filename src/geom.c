@@ -96,8 +96,8 @@ static void geom_snapshot(uint32_t tag)
 {
 	TRACE(SFID_DBG_2, 0xE0280000u | tag);
 	TRACE(SFID_DBG_9, cr_read32(CR_PM_FL_STACKTOP), cr_read32(CR_PM_ALIST_SP),
-	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x02A0),
-	      cr_read32(0x0398), cr_read32(CR_EVENT_STATUS), cr_read32(CR_GEOM_CTX_ENABLE));
+	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x2080),
+	      cr_read32(0x0398), cr_read32(CR_EVENT_STATUS), cr_read32(0x0D00));
 }
 
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
@@ -127,22 +127,27 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	/* 0x0220 reads 0 with the original firmware (Q16b answer): leave it 0 */
 	cr_write32(CR_PM_FL_STACKTOP - 4, 0);
 	cr_write32(CR_PM_FL_STACKTOP, rd32(fl_local, FL_STACK_TOP));
-#ifdef EXP_GLOBAL_FL
 	{
 		/*
-		 * E029: global free list candidates in the 0x2000 block, which repeats
-		 * the PM register shapes of E008 (40-bit addresses next to two-22-bit
-		 * fields like 0x0220/0x0398).
+		 * Global free list of PM context 0 (answer to Q16e): bank at 0x2078,
+		 * +0x00 base, +0x18/+0x1C allocated PB / MMU pages, +0x28 = +0x1C.
+		 * The stack-pointer register is not identified: 0x2080 (22-bit in
+		 * E008, pair 0x20C0 in bank 1) is our candidate (E030).
 		 */
 		const uint8_t *fl_global = fwptr(rd32(hwrt, HWRT_FREELISTS + 4));
 
 		if (fl_global) {
 			cr_write64(0x2078, rd64(fl_global, FL_CURRENT_DEV_ADDR));
-			cr_write32(0x2094, rd32(fl_global, FL_STACK_TOP));
-			cr_write32(0x2090, 0);
-		}
-	}
+			cr_write32(0x2090, rd32(fl_global, 32));        /* allocated_page_count */
+			cr_write32(0x2094, rd32(fl_global, 36));        /* allocated_mmu_page_count */
+			cr_write32(0x20A0, rd32(fl_global, 36));
+#ifndef EXP_NO_GLOBAL_SP
+			cr_write32(0x2080, rd32(fl_global, FL_STACK_TOP));
 #endif
+		}
+		/* CONTEXT_PB_BASE (0x02B0) = 3 at the geometry load (answer to Q16e) */
+		cr_write32(0x02B0, 3);
+	}
 	/* allocated page / MMU page counts of the local free list (Q16b answer) */
 	cr_write32(0x0398, rd32(fl_local, 32));
 	cr_write32(0x039C, rd32(fl_local, 36));

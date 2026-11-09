@@ -102,6 +102,7 @@ arrow keys with delays (GRUB drops keys sent too fast), presses Enter and waits 
 | `reg-survey.py read\|probe <start> <end>` | board | black-box register survey: non-zero values, or the writable-bit mask (write, read back, restore) with a deny list. See [E007](logRefs/E007-register-survey.md) and [E008](logRefs/E008-writable-mask-probe.md). |
 | `deqp.sh <pattern> [timeout] [lines]` | board | runs dEQP-VK cases on Mesa pvr and prints the results |
 | `cab-run.sh` | board | runs the `api.copy_and_blit.core` subgroups one by one (summary in `/tmp/cab/summary.txt`) |
+| `ta-sample.sh` | board | install `/tmp/rogue_…fw`, reload, run one draw case while sampling geometry/PM registers (`REGS`, `SAMPLE`, `CASE`) |
 | `stab-run.sh` | board | stability: `REPS` × compute basic, then `CYCLES` runtime-PM cycles (summary in `/tmp/stab/summary.txt`) |
 | `boot-entry.py` | host | GRUB entry selection through the serial console |
 | `mkfw.py`, `gen_sfids.py`, `ld-wrap.sh` | host | build helpers |

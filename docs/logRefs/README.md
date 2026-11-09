@@ -48,5 +48,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E027](E027-render-structures-by-value.md) | 2026-11-09 | Host render structures vs. observed registers | `0x0C98`/`0x0C18`/`0x0C08`/`0x0C10`/`0x0C20`/`0x0C78`/`0x0C80`/`0x0418` mapped to `hwrtdata_common` and context-state fields |
 | [E028](E028-ta-kick-bringup.md) | 2026-11-09 | First TA kick | canary method finds `0x0CB0` = TA context-state base; geometry runs and fetches its first 64 B, but the PM hands out no pages |
 | [E029](E029-ta-pm-registers-from-answers.md) | 2026-11-09 | TA with the Q16b/Q16c answers | local FL counts and geometry constants applied, `0x0420` counts kicks as in the original; still no PM allocation; global-FL guess in the 0x2000 block changes nothing (Q16e) |
+| [E030](E030-ta-global-freelist-pb-base.md) | 2026-11-09 | TA with the global FL bank and `CONTEXT_PB_BASE` | all identified PM registers programmed; still no allocation; `0x0D00 = 0x0F` is the inverse of the original's running state; PM catalogue setup is the remaining gap (Q16f) |
 
 The raw data is in [data/](data/).

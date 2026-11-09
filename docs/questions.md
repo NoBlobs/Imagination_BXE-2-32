@@ -28,6 +28,30 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q16f — PM page catalogues on a first kick (blocking)
+
+With every PM register the spec identified now programmed as observed
+([E030](logRefs/E030-ta-global-freelist-pb-base.md)): the local FL (`0x0210`, `0x0224`,
+`0x0398/0x039C`), the global FL bank (`0x2078`, `0x2090/0x2094/0x20A0`), `CONTEXT_PB_BASE`
+`0x02B0 = 3`, MLIST `0x02D8`, VHeap, the TA state `0x0CB0` and the constants. Geometry still
+waits forever for its first page. `0x0D00` reads `0x0F` (units 0–3 idle, 4–5 busy), the
+inverse of the original's `0x30–0x35` while running.
+
+The answer to Q16b says `PM_CAT_BASE_{VCE,TE,ALIST}0` receive **new valid entries (bit 0
+set) at every geometry kick**, while the host leaves the HWRTData catalogue bases at 0. We do
+not write guessed values there: they are physical addresses used without the MMU.
+1. **Who writes `PM_CAT_BASE_*0` before or at a first kick, and with what?** Does the
+   firmware take pages from a free list (which one, and how is the stack popped), or does
+   the PM do it after an enable? Which enable or register makes it do so?
+2. Are the `PM_CAT_BASE_*0` values related to the HWRTData (`pm_mlist_dev_addr`,
+   `vheap_table_dev_addr`, `macrotile_array_dev_addr`) or to the free lists? A few
+   example values with the matching free-list base and stack top from one run would let
+   us check the relation without the code.
+3. Which register holds the global free list's **stack pointer** (`SP = …` in the trace)?
+   We use `0x2080` (22-bit, the bank-1 pair is `0x20C0`) as a guess.
+4. What do bits 4 and 5 of `0x0D00` report, given that ours are busy (0) while the
+   original's are idle (1) during geometry?
+
 #### Q16e — The PM still allocates nothing (blocking)
 
 With the Q16b/Q16c answers applied ([E029](logRefs/E029-ta-pm-registers-from-answers.md)),
