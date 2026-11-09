@@ -560,6 +560,72 @@ If it still does not copy, the remaining unobserved candidates are:
 - the `0x0A00–0x0BFF` range;
 - writes of unchanged values.
 
+#### Q16j: what the observation can and cannot give (O, P)
+
+**The ordered write list is not provided.** Q16j asks for the original's sequence of register
+writes and polls between trace PM 30 and `CONTEXT_PB_BASE`, including writes of unchanged
+values. Such a list can only come from the original's code and would be a transcription of
+its routine, which the clean-room rules exclude (see Q16e, item 4). What follows is what
+black-box work and public sources give.
+
+**1. Decoding the fault at address 0 (P).** The request-status layout and tag tables are in
+the public vendor kernel driver for this SoC: the SpacemiT `linux-6.6` tree, `img-rogue`,
+dual MIT/GPLv2, files `km/rgx_cr_defs_km.h`, `km/rgxmhdefs_km.h` and the fault decoder in
+`rgxdebug.c`.
+- Its build configuration for BVNC `36.V.52.182` enables the "XE memory hierarchy" feature,
+  so the `__XE_MEM__` field layout of `BIF_FAULT_BANK*_REQ_STATUS` applies: `TAG_SB` = bits
+  51:46, `TAG_ID` = bits 45:40.
+- `0x0011B000_00000000` therefore decodes as `TAG_ID` = `0x30` and `TAG_SB` = `0x6`. In that
+  driver's tables this is the **PM allocation unit** (`0x30`; `0x31` is the PM deallocation
+  unit), side-band `0x6`, labelled `MAVP`. The other PM allocation side-bands in the same
+  table are: 0 TA free stack, 1 TA MList, 2 3D free stack, 3 3D MList, 4 PM context 0,
+  7 UF stack, 8 TA MMU stack.
+- So the read at address 0 is the **PM allocator's first memory access**, of the `MAVP`
+  kind, made with a zero base. It is not a freelist (free-stack) read.
+
+**2. A hardware probe on the original's own state (O).** The original firmware was loaded and
+the GPU powered, with no job submitted yet. The host then wrote PM registers directly:
+1. `0x20B8`/`0x20BC` (base) and `0x20C0`: the live `0x20C8` **stayed 0**, immediately and
+   1 ms later.
+2. `0x0210`/`0x0214`/`0x0224`: the live `0x0348` **stayed 0**.
+3. The same writes after `0x03D0 = 0x100`, `0x03D4 = 1`: still 0.
+4. The same writes inside a `PM_PAGE_MANAGEOP` pause (`0x02A0` 1 … 0): still 0.
+
+So the hardware behaves exactly as the clean implementation reports. Writing the freelist
+registers does not load the live stack pointers, even on a GPU the original firmware has
+initialised. The missing action is real; it is not a difference in idle state.
+
+This probe also produced **two MMU faults with the same request status as the one reported for the handshake-around variant**
+(`0x0001B000…`/`0x0011B000…`, PM allocator, `MAVP`). The firmware ran its recovery each
+time.
+- `ROGUE_CR_BIF_FAULT_BANK0_MMU_STATUS` read `0x21`: fault bit set, catalogue field 0. The
+  access went through catalogue 0, because no application context was bound yet, at
+  address 0.
+- So **some write in steps 1–4 started the PM allocator**. Its first access is the `MAVP`
+  read, and it used a zero base because the probe had not written VHeap (`0x0248`) or MLIST
+  (`0x02D8`).
+- Which single write started it was not isolated. The probes were stopped there, so as not
+  to cause more recoveries.
+
+This narrows the problem:
+- The PM allocator **can be started by register writes alone**. The fault reported for the handshake-around variant shows the
+  clean implementation also starts it, at least in the handshake-around variant.
+- When it starts, it reads `MAVP` data first. With a valid base and a bound memory context
+  that read succeeds, and only then would it pop the free stacks.
+- An implementation where the allocator starts but the live stack pointers stay 0 and
+  **no fault occurs** has started it with a valid base. The copy into the live registers
+  happens at a different point.
+
+Also seen in the probe: `0x0250` written with 1 reads back 1 and returns to 0 by itself
+within 1 ms, with no job present. The original never showed it non-zero at 5 µs sampling
+(Q16h).
+
+**3. What remains `PENDING`.** Which action makes the PM copy `+0x08`/`0x0224` into the live
+stack pointers. Observation cannot see it: it leaves no value change, and probing it by
+writes causes faults. The spec maintainer will not answer it with a write list from the
+original's code. A functional statement of the trigger, without a sequence, is a decision
+for the project owner.
+
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
   - `CR[0x258] = 1`, then **poll** `CR[0x258]` until bit 0 = 0.
