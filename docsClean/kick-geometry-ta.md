@@ -96,6 +96,43 @@ The global freelist's address (`0x80_0004_8900` in this run) was not found in th
 ranges. How the 4-entry arrays `vce_cat_base[4]`/`te_cat_base[4]` map to the single entry
 per bank is `TO CONFIRM`.
 
+#### PM freelist registers (answers Q16b, O)
+
+Two observation runs on the open v1.1 image:
+- the draw above;
+- `bigpb`: a 1024×1024 target with millions of triangles, out-of-memory, freelist grows and
+  partial renders.
+
+In both, register snapshots were compared with the values printed by the public
+`Load`/`Store Freelist` trace lines. Results:
+
+| Register | Holds | Evidence |
+|---|---|---|
+| `0x0210`/`0x0214` | **local** freelist base (`freelist_dev_addr`) of **PM context 0** | changes at the geometry load; equals the trace "FL-addr" |
+| `0x0218`/`0x021C` | the same for **PM context 1** | changes only at the fragment load, to the same address |
+| `0x0224` | local freelist **stack top** | `0x1F` at rest (32 pages → total − 1), `0` when exhausted; equals the trace "stacktop" |
+| `0x0398` | local freelist **allocated page count** | `6` and `20` in the two runs = trace "Alloc Page Count" |
+| `0x039C` | local freelist **allocated MMU page count** | `9` and `11` = trace "Alloc MMU Page Count" |
+| `0x02D8`/`0x02DC` (PM context 0), `0x02E0`/`0x02E4` (PM context 1) | a per-HWRTData address | alternates between the two HWRTData of `bigpb` at each geometry kick, and is copied to the context 1 pair at the fragment kick. Consistent with `pm_mlist_dev_addr` (`TO CONFIRM`: the HWRTData contents could not be read to match the value) |
+| `0x0270/0x0278/0x0280`, `0x02C0/0x02C8/0x02D0` | ALIST / MLIST stack pointers | the first register of each triple follows the geometry, the other two take its value at the fragment kick |
+
+Other answers:
+- **`0x0220`** read back as **0** in every snapshot of the original firmware, including
+  while freelists were loaded. Whether its low field is the total page count is
+  `TO CONFIRM`; the observed stack top is at `0x0224`.
+- **No register in `0x0200–0x043F` holds a value of the global freelist** (address, total,
+  stack top, counts), although these values changed many times during `bigpb`. The global
+  freelist's PM registers are outside the sampled range (`PENDING`).
+- **`PM_CAT_BASE_*` on a first kick:** bank 0 (`…0`) receives new, valid (bit 0 = 1)
+  entries at **every** geometry kick, including first kicks where the host left the
+  HWRTData catalogue bases at 0. Bank 1 (`…1`) takes the same values at the fragment kick.
+  This is consistent with the PM filling bank 0 itself during the geometry; whether the
+  firmware writes the bank before the kick is `TO CONFIRM`. The second word of
+  `VCE0`/`TE0` (`0x124C`/`0x1254`) becomes non-zero only around partial renders.
+- **Other PM enables:** `ROGUE_CR_PM_PARTIAL_RENDER_ENABLE` (`0x0338`) read 0 in every
+  snapshot, and `0x03E0` read 1 throughout. A separate PM "context select" or "start"
+  register was not identified (`PENDING`).
+
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
   - `CR[0x258] = 1`, then **poll** `CR[0x258]` until bit 0 = 0.
@@ -116,25 +153,36 @@ that held the same value:
 | `0x0408`/`0x040C` | `0x80_0013_F000` | `rogue_fwif_geom_regs.vdm_ctrl_stream_base` |
 | `0x17A0`/`0x17A4` | `0x20_0001_C400` | `rogue_fwif_geom_regs.tpu_border_colour_table` (the fragment kick writes the same register) |
 
-Other non-zero values in the geometry bank after the job, not matched to a field
-(`TO CONFIRM`; the `rogue_fwif_hwrtdata_common` fields are the likely sources):
+The other non-zero values in the geometry bank are analysed in "Unmatched geometry
+registers" below. `0x0410`/`0x0414` held `vdm_ctrl_stream_base` plus a small offset (`+0x40`,
+`+0x3C`) after each job, which reads like the VDM's current position in the control stream
+(`TO CONFIRM`).
 
-| Register | Value | Candidate |
-|---|---|---|
-| `0x0C98` | `0x00FF_00FF` | x/y maximum 255/255 of the 256×256 target (`screen_pixel_max`?) |
-| `0x0C18` | `0x0000_F00F` | 15/15 in tiles of 16×16 (`te_screen`?) |
-| `0x0C08`, `0x0C10` | `0x0010_0000` | — |
-| `0x0C20` | `0x10` | — |
-| `0x0C30`, `0x0C34` | `2`, `3` | — |
-| `0x0C48` | `8` | — |
-| `0x0C70` | `3` | — |
-| `0x0C78`, `0x0C80` | `0x88` | — |
-| `0x0C90`/`0x0C94` | `0x3089_705F` | — |
-| `0x0CA0` | `0x10` | — |
-| `0x0CE0` | `1` | — |
-| `0x0D00` | `0x3F` | — |
-| `0x0410`/`0x0414` | `vdm_ctrl_stream_base + 0x40` | — |
-| `0x0418`/`0x041C` | `0x80_0006_D000` | — |
+#### Unmatched geometry registers (answers Q16c, O)
+
+The `bigpb` run renders to a 1024×1024 target, against 256×256 for the draw. Comparing the
+two separates the values that depend on the target size from the constant ones:
+
+| Register | 256×256 | 1024×1024 | Reading |
+|---|---|---|---|
+| `0x0C98` | `0x00FF_00FF` | `0x03FF_03FF` | **x/y maximum in pixels** (width − 1, height − 1) |
+| `0x0C18` | `0x0000_F00F` | `0x0003_F03F` | **x/y maximum in 16×16 tiles** (tiles − 1) |
+| `0x0C08`, `0x0C10` | `0x0010_0000` | `0x0040_0000` | scales ×4 when each side grows ×4 (a per-row size or stride; `TO CONFIRM` which `hwrtdata_common` field) |
+| `0x0C20` | `0x10` | `0x100` | scales ×16, with the area (`TO CONFIRM`) |
+| `0x0C30`, `0x0C34` | `2`, `3` | same | constant |
+| `0x0C48` | `8` | same | constant |
+| `0x0C70` | `3` | same | constant |
+| `0x0C78`, `0x0C80` | `0x88` | same | constant |
+| `0x0C90`/`0x0C94` | `0x3089_705F` ×2 | same | constant 64-bit value (candidate: `multi_sample_ctl`, which is 64-bit and fixed per sample count; `TO CONFIRM`) |
+| `0x0CA0` | `0x10` | same | constant |
+| `0x0CE0` | `1` | same | constant |
+| `0x0D00` | `0x3F` | 0…`0x3F`, varying | hardware status that changes during the job, not configuration |
+| `0x0420` | `1` | 2, 3, … 9 | increments by one at each geometry kick (a running count) |
+| `0x0418`/`0x041C` | `0x80_0006_D000` | same | **`rogue_fwif_geom_ctx_state_per_geom.geom_reg_vdm_call_stack_pointer_init`** of the context's `context_state_addr` buffer (equal by value) |
+
+"Constant" means the value did not change across the two targets. The analysis does not
+show whether the firmware writes it as a constant or copies it from a field that happened
+to be equal in both runs.
 
 `vdm_context_resume_task0_size` (`0x2001_0000` in this job) was **not** found in any
 sampled register. It is probably used only when resuming a stored context (`TO CONFIRM`).
@@ -162,13 +210,27 @@ identified by value.
   (`rogue_fwif_hwrtdata.geom_caches_need_zeroing`).
 - `CR[0x40A8] = (primary core) & 1` (core/TE selection).
 
+**Context-state registers (Q16d, O — partial).** For the draw and `bigpb` runs, the
+render context's `static_render_context_state.ctxswitch_regs[0]` (at render-context offset
+`0x130`, public layout) held:
+- `geom_reg_vdm_context_state_base_addr = 0x80_0006_E000`;
+- `geom_reg_ta_context_state_base_addr = 0x80_0006_F000`;
+- the `geom_state[]` store/resume task words.
+
+**None of these values was found in any register sampled after a job.** `0x0CB0`, `0x0CB8`,
+`0x0428` and `0x0D20` read 0, and `0x0CE0` read 1. So the observation neither confirms nor
+contradicts `0x0CB0 = geom_reg_ta_context_state_base_addr` or `0x0428 =
+geom_reg_vdm_context_state_base_addr`: either these registers are only meaningful during the
+job, or they are cleared at its end. Settling it needs a view of the writes during the kick
+(`PENDING`).
+
 ### E. Enable the context and broadcast the configuration
 
 - `CR[set+0xC68] = 1`, then **poll** `CR[set+0xC68]` until bit 0 = 1 (context
   acceptance). Must complete before the trigger.
 - `0x0408`/`0x040C` receive the VDM control-stream base (`vdm_ctrl_stream_base`, observed
   in phase C), not a freelist/ALIST configuration as earlier versions said. The pair
-  `0x0418`/`0x041C` also holds an address after the job (`TO CONFIRM` which).
+  `0x0418`/`0x041C` holds `geom_reg_vdm_call_stack_pointer_init` (see Q16c above).
 
 ### F. Trace, timing and watchdog (before the trigger)
 
