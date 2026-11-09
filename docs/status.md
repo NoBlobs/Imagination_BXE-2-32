@@ -63,6 +63,7 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E033 | Q16h first-load registers `0x20F8`, `0x03D0`/`0x03D4` written; idle PM state now equals the original; live SPs still 0: the copy step is unknown (Q16i) |
 | E032 | Q16g applied (bank `0x20B8`, `0x0240`); six load variants: live SPs `0x20C8`/`0x0348` stay 0; `0x02A8` = pause ack; handshakes around the writes fault at 0 (Q16h) |
 | E031 | live PM stack pointers ignore writes and stay 0; PM catalogues stay 0: the PM sees empty free lists (Q16g) |
 | E030 | global FL bank and `CONTEXT_PB_BASE` programmed; still no allocation; the catalogue setup is the gap (Q16f) |

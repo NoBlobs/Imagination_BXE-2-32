@@ -28,7 +28,34 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16h — What makes the PM copy `+0x08`/`0x0224` into its live stack pointers? (blocking)
+#### Q16i — What action copies the loaded free list into the PM's live stack pointers? (blocking)
+
+With the Q16h answer applied ([E033](logRefs/E033-pm-first-load-flags.md)), our PM state
+after init equals the original's: the same non-zero list, with `0x20F8` going 0 → 1 at the
+load. At the first geometry load we write, in the observed order: `0x20F8 = 1`, `0x0240`,
+`0x03D0 = 0x100`, `0x03D4 = 1`, `0x0210`/`0x0224`, `0x20B8`/`0x20C0`/`0x20D0`/`0x20D4`,
+`0x02B0 = 3`, `0x0398`/`0x039C`, MLIST, VHeap. Every value lands, but **`0x0348` and
+`0x20C8` stay 0**: read by our firmware right after the writes, and still 0 seconds later.
+Also tried: `0x0388 = 1`, handshakes before, around and after the writes, a
+`PM_PAGE_MANAGEOP` pause, the broadcast bank, clocks ON, 32-bit writes, and the bases
+rewritten after the tops.
+
+The Q16h answer says the copy is **a separate step** (5–13 µs after the `+0x08` write in 48
+of 136 loads), so it is something that leaves no value change in 6 µs sampling.
+1. In the 48 delayed loads, **which register changed in the same sample as the late live
+   copy**, or in the sample just before it? Any register at all, inside or outside the PM
+   ranges: `0x0D00`, EVENT_STATUS, MTS, `0x0420`, `0x0C68`, BIF/MMU (`0x1200–0x12FC`), SLC.
+2. Do `0x03D0`/`0x03D4` change in the **same** sample as the local live copy (`0x0348`) in
+   later loads, or always one sample before? Which one comes first decides whether they are
+   a command (written by the firmware) or a status (set by the PM after the copy).
+3. Is a **PM TLB / MMU invalidation** (`0x1348` "PM TLB", or `MMU_CTRL_INVAL` with the PM
+   or all-contexts bit) or an **SLC flush** issued between the free-list writes and the
+   live copy? An operation like that would leave no value change.
+4. If register sampling cannot catch it, **which firmware trace lines** (group and id, from
+   the public trace list) appear between `UFL-TA-Base`/`FL-TA-Base` and `Kick TA` at a
+   first load?
+
+#### Q16h — What makes the PM copy `+0x08`/`0x0224` into its live stack pointers? (answered: first-load registers, see E033)
 
 With the Q16g answer applied ([E032](logRefs/E032-pm-live-sp-load-variants.md)): `0x0240 =
 0x80_0000_0000`, local `0x0210`/`0x0224`, geometry bank `0x20B8`/`0x20C0`/`0x20D0`/`0x20D4`,

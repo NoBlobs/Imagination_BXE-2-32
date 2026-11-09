@@ -86,6 +86,9 @@ The firmware reaches registers in three ways:
 | `0x0C30/0x0C34`, `0x0C48`, `0x0C70`, `0x0C90/0x0C94`, `0x0CA0` | O | constants `2/3`, `8`, `3`, `0x3089705F` ×2, `0x10` | spec observation |
 | `0x0D00` | O, E | status: `0x3F` idle, `0x0F` while our stalled TA runs | observed |
 | `0x0248` | O | `PM_VHEAP_TABLE` ← `vheap_table_dev_addr` | spec observation |
+| `0x20F8` | O, E | 0 → 1 at the first load after boot, then stays 1; our init writes it 1 at boot | spec (Q16h) + E033 |
+| `0x03D0` / `0x03D4` | O, E | per-load bits: geometry bit 8 / bit 0, fragment bit 16 / bit 8 ("PM context loaded"?); plain storage on ours | spec (Q16h) + E033 |
+| `0x0388` | O, E | 1 after init and after jobs in the original; our TQ kick writes 0 (Q13 table) | spec + E033 |
 | `0x0250` / `0x0258` | S, E | PM handshakes; PM writes made while `0x0250 = 1` fault at address 0 (E032) | spec + E032 |
 | `0x0270`/`0x0278`/`0x0280`, `0x02C0`/`0x02C8`/`0x02D0` | O, E | ALIST / MLIST stack pointers (`0x0278`/`0x02C8` writable) | partly |
 | `0x0C08` / `0x0C10` | O, E | `TE_MTILE1/2` ← `te_mtile1/2` | value + mask + Mesa |

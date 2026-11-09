@@ -148,8 +148,27 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	cr_write64(0x0000, 0x0015550015115555ull);
 	TRACE(SFID_DBG_4, 0xE0280B30u, cr_read32(0x0008), cr_read32(0x000C));   /* CLK_STATUS */
 #endif
+	/* idle PM values to compare with the original's after-init read (Q16h) */
+	TRACE(SFID_DBG_8, 0xE0280B40u, cr_read32(0x20F8), cr_read32(0x03D0), cr_read32(0x03D4),
+	      cr_read32(0x0388), cr_read32(0x03C0), cr_read32(0x03E0));
+#ifdef EXP_0388
+	cr_write32(0x0388, 1);   /* E033: 1 after init in the original; our TQ kick zeroes it */
+#endif
+#ifndef EXP_NO_PM_FLAGS
+	/* Q16h: 0x20F8 0 -> 1 first, then 0x0240, then 0x03D0/0x03D4 */
+#ifdef EXP_20F8_EDGE
+	cr_write32(0x20F8, 0);
+#endif
+	cr_write32(0x20F8, 1);
+#endif
 	/* 0x0240 = base of the general heap: the first change at a first load (Q16g) */
 	cr_write64(0x0240, 0x8000000000ull);
+#ifndef EXP_NO_PM_FLAGS
+	/* geometry load: bit 8 / bit 0 set, the fragment-load bits 16 / 8 cleared (Q16h) */
+	cr_write32(0x03D0, (cr_read32(0x03D0) & ~0x10000u) | 0x100u);
+	cr_write32(0x03D4, (cr_read32(0x03D4) & ~0x100u) | 0x1u);
+	TRACE(SFID_DBG_4, 0xE0280B41u, cr_read32(0x03D0), cr_read32(0x03D4));
+#endif
 	cr_write64(CR_PM_VHEAP_TABLE, rd64(hwrt, HWRT_VHEAP_TABLE));
 	pm_w64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));
 	/* 0x0220 reads 0 with the original firmware (Q16b answer): leave it 0 */
@@ -186,6 +205,9 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #else
 			pm_w64(0x20C0, rd32(fl_global, FL_STACK_TOP));
 #endif   /* 64-bit: high word commits? (E032) */
+#ifdef EXP_TOP_FIRST
+			pm_w64(0x20B8, rd64(fl_global, FL_CURRENT_DEV_ADDR));   /* base again, after the top */
+#endif
 			pm_w32(0x20D0, rd32(fl_global, 32));
 			pm_w32(0x20D4, rd32(fl_global, 36));
 #ifdef EXP_PM_PAUSE
@@ -200,6 +222,9 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		cr_write32(0x02B0, 3);
 	}
 	/* allocated page / MMU page counts of the local free list (Q16b answer) */
+#ifdef EXP_TOP_FIRST
+	pm_w64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));   /* base again, after the top */
+#endif
 	cr_write32(0x0398, rd32(fl_local, 32));
 	cr_write32(0x039C, rd32(fl_local, 36));
 	cr_write64(CR_BIF_PM_CAT_BASE_VCE0, rd64(hwrt, HWRT_VCE_CAT_BASE));

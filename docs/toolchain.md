@@ -93,6 +93,10 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | `EXP_PM_BCAST` | with `EXP_TA`: write the PM free-list registers through the broadcast bank (E032) |
 | `EXP_CLK_ON` | with `EXP_TA`: force every `CLK_CTRL` field from AUTO to ON before the PM writes (E032) |
 | `EXP_SP32` | with `EXP_TA`: 32-bit-only writes of `0x20C0` and `0x0224` (E032) |
+| `EXP_NO_PM_FLAGS` | with `EXP_TA`: leave out the Q16h first-load writes `0x20F8`, `0x03D0`/`0x03D4` (E033) |
+| `EXP_20F8_EDGE` | with `EXP_TA`: write `0x20F8` 0 then 1 at the load (E033) |
+| `EXP_0388` | with `EXP_TA`: `0x0388 = 1` before the PM load (E033) |
+| `EXP_TOP_FIRST` | with `EXP_TA`: rewrite the free-list bases after the stack tops (E033) |
 | `EXP_MLIST_REG`, `EXP_VDM_STATE_REG`, `EXP_TA_STATE_REG` | override the guessed register offsets used by `geom.c` (0 = do not write) |
 | `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |
 | `EXP_NO_PDS_BASE` | leave the PDS exec base at 0, to reproduce the E006 page fault (E025) |
