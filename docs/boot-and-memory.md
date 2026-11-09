@@ -218,4 +218,8 @@ read at any time while the GPU is powered.
 | `0x1A40`/`48`/`50` | `CR_DBG_IRQ_TIMER`/`BG`/`IRQ` | count of HW0/HW1/HW2 interrupts ([E016](logRefs/E016-completion-path-counters.md)) |
 | `0x1A58` | `CR_DBG_IRQ_LASTEV` | `EVENT_STATUS` seen by the last IRQ task |
 | `0x1A60` | `CR_DBG_EVENTS_SEEN` | OR of every event handled by `kick_events()` |
+| `0x1A68` | `CR_DBG_HWR_COUNT` | completed hardware recoveries |
+| `0x1A70` | `CR_DBG_BG_WITH_EV` | BG tasks entered with a DM completion pending ([E018](logRefs/E018-irq-task-delivery.md)) |
+| `0x1A18`/`0x1A20` | `CR_DBG_KICKS_CDM`/`CR_DBG_IRQ_COMPUTE` | CDM kicks / IRQ tasks carrying `COMPUTE_FINISHED`. They share the exception registers, which hold their exception meaning only after a fatal exception. |
+| `0x1A28`/`0x1A30`/`0x1A38` | `CR_DBG_INT_CTX`/`BG_LASTEV`/`BG_CTX` | `MTS_INTCTX` at IRQ task entry; `EVENT_STATUS` and `MTS_BGCTX` at BG task entry (these overwrite the exec-base read-backs after init) |
 | `0x1A78` | `CR_SCRATCH15` | bitmask of the busy data masters (set at kick, cleared at completion) |

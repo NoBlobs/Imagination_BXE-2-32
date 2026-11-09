@@ -71,3 +71,11 @@
 #define CR_DBG_IRQ_IRQ          0x1A50  /* HW2 (MTS IRQ task) count */
 #define CR_DBG_IRQ_LASTEV       0x1A58  /* EVENT_STATUS seen by the last IRQ task */
 #define CR_DBG_EVENTS_SEEN      0x1A60  /* OR of every event handled by kick_events */
+#define CR_DBG_HWR_COUNT        0x1A68  /* completed hardware recoveries */
+#define CR_DBG_BG_WITH_EV       0x1A70  /* BG tasks entered with a DM completion pending (E018) */
+/* scratch 0x1A78 is CR_SCRATCH15 (busy DMs); the next two reuse the exec-base read-backs */
+#define CR_DBG_BG_LASTEV        0x1A30  /* EVENT_STATUS at the last such BG task */
+#define CR_DBG_BG_CTX           0x1A38  /* MTS_BGCTX at the last BG task entry */
+#define CR_DBG_IRQ_COMPUTE      0x1A20  /* IRQ tasks that carried COMPUTE_FINISHED (shares EXC_EPC) */
+#define CR_DBG_KICKS_CDM        0x1A18  /* CDM kicks issued (shares EXC_CAUSE) */
+#define CR_DBG_INT_CTX          0x1A28  /* MTS_INTCTX at the last IRQ task entry (shares EXC_BADVA) */

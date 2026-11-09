@@ -15,7 +15,7 @@
 
 ```bash
 make -C src                                  # build/rogue_36.29.52.182_v1.fw
-make -C src -B EXP="-DEXP_TQ3D"             # experiment knobs (see below)
+make -C src -B EXP="-DEXP_NO_EVENT_POLL"    # experiment knobs (see below)
 make -C src sfid SFH=<path>/pvr_rogue_fwif_sf.h   # regenerate include/sfid.h
 make -C src clean
 ```
@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `cc8fc482…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `4d78b64a…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -76,11 +76,12 @@ warning lines while every other diagnostic is still printed.
 
 ## Experiment knobs
 
-Compile-time knobs, off by default (`make -B EXP="-DEXP_TQ3D"`):
+Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 
 | Knob | Effect |
 |---|---|
-| `EXP_TQ3D` | compile the experimental TQ_3D kick (E014). Without it, `TQ_3D` tasks are retired at once. |
+| `EXP_NO_EVENT_POLL` | the timer no longer polls `EVENT_STATUS`, so completions come from the MTS tasks only (E018) |
+| `PBE_LAYOUT=0` | contiguous PBE word layout for the TQ kick (default 1 = planar, E017) |
 
 The exec-base and event-enable knobs of E009–E012 were removed once the spec gave the
 registers (`gpu_init.c`).

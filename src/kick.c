@@ -89,6 +89,15 @@ static void bif_set_index(uint32_t dm, uint32_t slot)
 	cr_write32(CR_BIF_CAT_BASE_INDEX, lo);
 }
 
+/* After a GPU soft reset: re-program every bound page catalogue. */
+void bif_rebuild(void)
+{
+	for (uint32_t s = 1; s < BIF_SLOTS; s++)
+		if (bif_pc[s] != ~0ull)
+			cr_write64(CR_BIF_CAT_BASE0 + 8 * s, bif_pc[s]);
+	cr_write32(CR_BIF_CTRL_INVAL, 0xF);
+}
+
 void kick_init(void)
 {
 	for (uint32_t s = 0; s < BIF_SLOTS; s++)
@@ -147,6 +156,7 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	dm_start(DM_CDM, ctxaddr, cmd_off, EV_COMPUTE_FINISHED, SFID_MAIN_6, slot);
 	(void)cr_read32(CR_CORE_REVISION);
 
+	g.cdm_kicks++;
 	bcast_write32(CR_CDM_RUN, 1);   /* trigger: last write */
 	return true;
 }
@@ -160,7 +170,7 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define CR_ISP_BGOBJVALS        0x0F88  /* cmd+0x30 */
 #define CR_PDS_BGRND0_BASE      0x06A0  /* layouts match Mesa PDS_BGRND0..3 (E014) */
 #define CR_PDS_BGRND1_BASE      0x06A8
-#define CR_PDS_BGRND2_BASE      0x06B0
+#define CR_PDS_BGRND2_BASE      0x06B0  /* not written by the transfer kick (spec) */
 #define CR_PDS_BGRND3_SIZEINFO  0x06B8
 #define CR_ISP_MTILE_BASE       0x0F20  /* cmd+0x90 */
 #define CR_ISP_RGN              0x0F28  /* cmd+0x6C */
@@ -179,9 +189,10 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define CR_EVENT_PIXEL_PDS_CODE 0x0618  /* cmd+0x60 */
 #define CR_EVENT_PIXEL_PDS_DATA 0x0620  /* cmd+0x64 */
 #define CR_PBE_WORDS            0x1510  /* cmd+0x98 ... */
-#define CR_ISP_RENDER           0x0F08  /* public: trigger */
+#define CR_ISP_RENDER           0x0F08  /* public */
+#define CR_PIXEL_LAUNCH         0x0F00  /* no public name: pixel-pipe launch */
 
-[[maybe_unused]] static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
+static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		      const struct ccb_cmd_header *hdr, const struct cmd_transfer *cmd,
 		      uint32_t cmd_off)
 {
@@ -197,7 +208,6 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_ISP_BGOBJVALS, r->isp_bgobjvals);
 	bcast_write64(CR_PDS_BGRND0_BASE, r->pds_bgnd0_base);
 	bcast_write64(CR_PDS_BGRND1_BASE, r->pds_bgnd1_base);
-	bcast_write64(CR_PDS_BGRND2_BASE, 0);
 	bcast_write64(CR_PDS_BGRND3_SIZEINFO, r->pds_bgnd3_sizeinfo);
 	bcast_write64(CR_ISP_MTILE_BASE, r->isp_mtile_base);
 	bcast_write32(CR_ISP_RGN, r->isp_rgn);
@@ -220,8 +230,33 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_EVENT_PIXEL_PDS_INFO, r->event_pixel_pds_info);
 	bcast_write32(CR_EVENT_PIXEL_PDS_CODE, r->event_pixel_pds_code);
 	bcast_write32(CR_EVENT_PIXEL_PDS_DATA, r->event_pixel_pds_data);
-	for (uint32_t i = 0; i < 9; i++)
-		bcast_write64(CR_PBE_WORDS + 8 * i, r->pbe_wordx_mrty[i]);
+	/*
+	 * PBE: the probe (E008) shows 16 writable 64-bit registers at
+	 * 0x1510..0x1588 = 2 words x 8 MRTs, and the spec gives "one register
+	 * pair per render target" over 0x1510..0x1564 for a TQ (3 MRTs).
+	 * PBE_LAYOUT 1 (default): planar, WORD0_MRTn = 0x1510 + 8n and
+	 * WORD1_MRTn = 0x1550 + 8n, from command words 3n and 3n+1 (E017).
+	 * PBE_LAYOUT 0: the 9 command words written contiguously.
+	 */
+#ifndef PBE_LAYOUT
+#define PBE_LAYOUT 1
+#endif
+	if (PBE_LAYOUT == 0) {
+		for (uint32_t i = 0; i < 9; i++)
+			bcast_write64(CR_PBE_WORDS + 8 * i, r->pbe_wordx_mrty[i]);
+	} else {
+		for (uint32_t n = 0; n < 3; n++) {
+			bcast_write64(CR_PBE_WORDS + 8 * n, r->pbe_wordx_mrty[3 * n]);
+			bcast_write64(CR_PBE_WORDS + 0x40 + 8 * n, r->pbe_wordx_mrty[3 * n + 1]);
+		}
+	}
+	TRACE(SFID_DBG_7, (uint32_t)(r->pbe_wordx_mrty[0] >> 32), (uint32_t)r->pbe_wordx_mrty[0],
+	      (uint32_t)(r->pbe_wordx_mrty[1] >> 32), (uint32_t)r->pbe_wordx_mrty[1],
+	      (uint32_t)(r->pbe_wordx_mrty[2] >> 32), (uint32_t)r->pbe_wordx_mrty[2]);
+	TRACE(SFID_DBG_9, (uint32_t)(r->isp_mtile_base >> 32), (uint32_t)r->isp_mtile_base,
+	      (uint32_t)(r->pds_bgnd0_base >> 32), (uint32_t)r->pds_bgnd0_base,
+	      (uint32_t)(r->pds_bgnd3_sizeinfo >> 32), (uint32_t)r->pds_bgnd3_sizeinfo,
+	      r->isp_render, r->isp_rgn);
 
 	/* D. trace, state, trigger */
 	TRACE(SFID_MAIN_121, ctxaddr, cmd_off, 0, ctx->pid, ctx->priority, cmd->frame_num,
@@ -231,7 +266,8 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	isp = r->isp_render & ~0x10u;           /* mode / direction from the host */
 	bcast_write32(CR_ISP_RENDER, isp);
 	(void)cr_read32(CR_CORE_REVISION);
-	bcast_write32(CR_ISP_RENDER, cr_read32(CR_ISP_RENDER) | 0x10);   /* start: last write */
+	bcast_write32(CR_ISP_RENDER, cr_read32(CR_ISP_RENDER) | 0x10);
+	bcast_write32(CR_PIXEL_LAUNCH, 1);      /* the real launch: last write (Q8, E017) */
 	return true;
 }
 
@@ -243,11 +279,8 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	switch (id) {
 	case CCB_CMD_CDM:
 		return kick_cdm(ctxaddr, ctx, hdr, payload, cmd_off);
-#ifdef EXP_TQ3D
 	case CCB_CMD_TQ_3D:
-		/* experimental: programmed per spec but the 3D pipe does not start (E014) */
 		return kick_tq3d(ctxaddr, ctx, hdr, payload, cmd_off);
-#endif
 	case CCB_CMD_NULL:
 	case CCB_CMD_ABORT:
 	case CCB_CMD_PRE_TIMESTAMP:
@@ -261,11 +294,7 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	}
 }
 
-/*
- * MMU page fault while a DM runs: report it and retire the running tasks so
- * that the host is not left waiting.  This is not a hardware recovery: the
- * faulting unit may stay busy until the next power cycle (HWR still to do).
- */
+/* MMU page fault while a DM runs: report it and recover (hwr.c). */
 static void mmu_fault(void)
 {
 	uint64_t mmu = cr_read64(CR_BIF_FAULT_BANK0_MMU_STATUS);
@@ -274,14 +303,7 @@ static void mmu_fault(void)
 	TRACE(SFID_HWR_80, 0, (uint32_t)(mmu >> 32), (uint32_t)mmu,
 	      (uint32_t)(req >> 32), (uint32_t)req);
 	cr_write32(CR_EVENT_CLEAR, EV_MMU_PAGE_FAULT);
-	if (g.sysdata)
-		g.sysdata->hwr_state_flags |= HWR_GENERAL_LOCKUP;
-	for (uint32_t d = 0; d < DM_MAX; d++) {
-		if (!dms[d].busy)
-			continue;
-		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
-		sched_dm_done(d);
-	}
+	hwr_recover(HWR_REASON_MMU_FAULT);
 }
 
 void kick_events(uint32_t ev)

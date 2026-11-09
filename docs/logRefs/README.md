@@ -34,6 +34,9 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E013](E013-gpu-units-init-compute-pass.md) | 2026-11-08 | Full GPU bring-up from the updated spec | **first compute jobs pass** (`empty_shader`, `copy_ssbo_*`, barriers, atomics) |
 | [E014](E014-tq3d-kick-does-not-start.md) | 2026-11-08 | TQ_3D transfer kick | programmed per spec, `ISP_RENDER = 0x13`, but `PERF_3D_CYCLE` stays 0; `0x06A0..0x06B8` = PDS_BGRND0..3 |
 | [E015](E015-slc-flush-before-mmu-inval.md) | 2026-11-08 | MMU fault in a new memory context | flush and invalidate the SLC before MMU invalidation |
-| [E016](E016-completion-path-counters.md) | 2026-11-08 | Completion delivery | BG tasks work; `COMPUTE_FINISHED` comes through the 1 ms poll, the MTS IRQ task does not fire |
+| [E016](E016-completion-path-counters.md) | 2026-11-08 | Completion delivery | BG tasks work; the IRQ task seemed silent (**withdrawn by E018**) |
+| [E017](E017-tq3d-launch-fault-at-zero.md) | 2026-11-08 | TQ_3D with the `0x0F00` launch | **the 3D pipe starts**, then writes to address 0 (Q12) |
+| [E018](E018-irq-task-delivery.md) | 2026-11-08 | IRQ task delivery | HW2 fires on every completion; E016 was the poll winning a race |
+| [E019](E019-hwr-and-compute-basic-67.md) | 2026-11-08 | HWR + full compute group | recovery in ~0.28 ms; `compute.pipeline.basic` **67/82 pass**, 6 fail (images), 9 not supported |
 
 The raw data is in [data/](data/).

@@ -20,20 +20,19 @@ Mesa `pvr`.
 | Runtime PM, warm boot | [E005](logRefs/E005-runtime-pm-cycle.md) |
 | Vulkan enumeration | `PowerVR B-Series BXE-2-32 MC1` |
 | Client CCB: fences, updates, cleanup, BIF slots | |
-| **Compute (CDM) jobs** | `dEQP-VK.compute.pipeline.basic`: 9 pass ([E013](logRefs/E013-gpu-units-init-compute-pass.md), [E015](logRefs/E015-slc-flush-before-mmu-inval.md)) |
-| MMU fault reporting | trace HWR id 80 with MMU and request status; the task is retired |
+| **Compute (CDM) jobs** | `dEQP-VK.compute.pipeline.basic`: **67/82 pass**, 6 fail (images), 9 not supported ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
+| **Event delivery through the MTS IRQ task** | HW2 on every completion ([E018](logRefs/E018-irq-task-delivery.md)); the polls are a backstop |
+| **HWR** | MMU fault or 2 s watchdog → SOFT_RESET pulse → units re-init → discard; ~0.28 ms; 13 recoveries in one dEQP run without a hang ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
+| TQ_3D launch | the 3D pipe starts (`ISP_RENDER \|= 0x10`, `0x0F00 = 1`) ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)) |
 
 ## Not working yet
 
 | Item | State |
 |---|---|
-| TQ_3D (transfer via the 3D pipe) | programmed per spec, but the 3D pipe never starts ([E014](logRefs/E014-tq3d-kick-does-not-start.md)). Compiled only with `-DEXP_TQ3D`; by default retired at once (Q8). |
-| Completion through the MTS IRQ task | `COMPUTE_FINISHED` does not raise HW2. Completions are found by the 1 ms poll ([E016](logRefs/E016-completion-path-counters.md), Q9). |
-| Compute cases that need images | fail, because they need TQ_3D |
-| `empty_workgroup_x/y/z` | fail with a zero result, cause unknown (Q10) |
-| HWR | no reset or recovery. A stuck job (`image_atomic_op_*`) blocks every later job until reboot (Q11). |
+| TQ_3D output | the pipe runs, then writes to address 0 and HWR discards the job ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md), Q12). Compute cases with images fail (6). |
 | Geometry / fragment / TDM kicks | not implemented; retired at once |
-| Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered once at boot. |
+| HWR info buffer, context-reset notification (FWCCB) | not implemented (the host is not told about a discarded job) |
+| Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
 
@@ -54,13 +53,15 @@ Mesa `pvr`.
 | E013 | the spec's GPU bring-up makes compute work |
 | E014 | `0x06A0..0x06B8` = `PDS_BGRND0..3` (Mesa layouts match the probe masks); TQ start still missing |
 | E015 | flush and invalidate the SLC before MMU invalidation (fault in a new context) |
-| E016 | BG tasks arrive; `COMPUTE_FINISHED` does not raise the IRQ task |
+| E016 | (withdrawn by E018) |
+| E017 | TQ launch = `ISP_RENDER \|= 0x10` then `0x0F00 = 1`: the 3D pipe runs; fault writing to address 0 |
+| E018 | the MTS IRQ task fires on every completion; the polls only race it |
+| E019 | HWR from the spec works (~0.28 ms); compute basic 67/82 |
 
 ## Next steps
 
-1. Get answers to Q8 (TQ start) and Q9 (IRQ task routing).
-2. Minimal HWR (Q11): soft reset of the GPU units, then GPU units init again, then
-   discard the faulting command, so that one bad job no longer blocks the device.
-3. Fragment (3D) and geometry kicks: the spec now maps the geometry register set
-   (`kick-geometry-ta.md`, Q4 answered) and the 3D start (Q5 answered).
-4. Investigate `empty_workgroup_x/y/z`.
+1. Q12: find the source of the TQ's address-0 write, so that images work.
+2. Fragment (3D) kick: the spec maps the registers and the two-write launch.
+3. Geometry (TA) kick, with PM/free-list handling (`partial-render-spm.md`).
+4. HWR info buffer and FWCCB context-reset notification, so that Vulkan sees device loss.
+5. Broader dEQP runs (`dEQP-VK.compute.*`, `api.*`, then `draw.*` once 3D/TA exist).

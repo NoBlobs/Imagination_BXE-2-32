@@ -27,3 +27,10 @@ bool kick_resource_busy(uint32_t type, fwaddr_t addr);
 void sched_dm_done(uint32_t dm);
 /* Poll EVENT_STATUS for completions (backstop when no IRQ task arrives). */
 void sched_poll(void);
+
+void bif_rebuild(void);
+
+/* hwr.c */
+enum { HWR_REASON_MMU_FAULT = 1, HWR_REASON_LOCKUP = 2 };
+void hwr_recover(uint32_t reason);
+void hwr_watchdog(void);

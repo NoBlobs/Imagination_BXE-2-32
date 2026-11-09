@@ -1,0 +1,20 @@
+[  114.510807] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[  114.511427] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[  114.511449] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[  114.516511] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+[  212.204824] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[  212.205354] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[  212.205375] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[  212.210811] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+[  246.953497] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[  246.954069] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[  246.954093] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[  246.959531] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+[  288.641192] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[  288.641729] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[  288.641753] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[  288.647420] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+[  327.353205] powervr cac00000.gpu: [drm] Running on unsupported hardware; you may encounter bugs!
+[  327.353761] powervr cac00000.gpu: [drm] loaded firmware powervr/rogue_36.29.52.182_v1.fw
+[  327.353784] powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
+[  327.359364] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0

@@ -34,7 +34,8 @@ The client CCB walk and the data-master kicks are in
 | `src/power.c` | ~85 | `KCCB_POW` handling and the power-sync word. |
 | `src/mmu.c` | ~45 | `KCCB_MMUCACHE`: BIF invalidation, PM TLB and the MIPS dynamic TLB. |
 | `src/sched.c` | ~420 | Context table, client CCB walk (fences, updates, tasks), retirement, cleanup, power state. |
-| `src/kick.c` | ~330 | BIF catalogue slots, the compute (CDM) kick, the experimental TQ_3D kick, completion events, MMU fault report, SLC flush. |
+| `src/kick.c` | ~370 | BIF catalogue slots and their rebuild, the compute (CDM) kick, the TQ_3D kick, completion events, MMU fault report, SLC flush. |
+| `src/hwr.c` | ~110 | Hardware recovery: MMU fault or 2 s watchdog → SOFT_RESET pulse → GPU units re-init → discard the guilty commands. |
 | `src/util.c` | ~190 | memset and memcpy, 64-bit division, GPU timer, delays and polls, write barrier, host notification, trace writer. |
 | `src/include/fwif.h` | ~450 | Firmware interface structures, checked with `static_assert` against the offsets in the public `pvr_rogue_fwif_check.h`. |
 | `src/include/layout.h` | ~60 | Every fixed address and size. It is parsed by `tools/mkfw.py` too. |
@@ -70,8 +71,9 @@ interrupt at a time:
   polls the KCCB and the completion events, so the firmware keeps working even if the
   MTS does not deliver a task (the MTS set-up is open question Q1). In practice the
   host sees the firmware answer within one tick. [E016](logRefs/E016-completion-path-counters.md)
-  showed that the BG task arrives for every KCCB batch, but `COMPUTE_FINISHED` has not
-  raised the IRQ task yet. Compute completions are currently found by this poll.
+  showed that the BG task arrives for every KCCB batch. [E018](logRefs/E018-irq-task-delivery.md)
+  showed that the IRQ task also fires on every completion. The polls only race it, and
+  whichever path runs first handles the event.
 
 All three sources share one entry, `int_common` in `vectors.S`. It saves the
 caller-saved registers, EPC and Status on the wired stack. It then **clears
@@ -114,6 +116,7 @@ refill handler maps that address on demand from the host's MIPS page table.
  fw_main ─▶ shared_init ─▶ trace_init ─▶ gpu_power_on ─▶ gpu_units_init (dust_power) ─▶ sched_init ─▶ kick_init
  irq_dispatch ─▶ kccb_process ─▶ {sched_kick, sched_cleanup, mmu_cache_op, pow_handle, ...}
               └▶ sched_poll / sched_irq ─▶ kick_events ─▶ sched_dm_done
-              └▶ sched_run ─▶ ctx_process ─▶ kick_task ─▶ kick_cdm / kick_tq3d (EXP_TQ3D)
+              └▶ sched_run ─▶ ctx_process ─▶ kick_task ─▶ kick_cdm / kick_tq3d
+              └▶ (timer) hwr_watchdog ─▶ hwr_recover;  kick_events(MMU fault) ─▶ hwr_recover
  everything ─▶ util (TRACE, notify_host, write_barrier, cr_poll32, gpu_timer)
 ```

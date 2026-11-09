@@ -127,17 +127,31 @@ void irq_dispatch(uint32_t source)
 	switch (source) {
 	case 0: /* timer */
 		g.timer_irqs++;
+		cr_write32(CR_DBG_KICKS_CDM, g.cdm_kicks);
 		cr_write32(CR_DBG_IRQ_TIMER, g.timer_irqs);
 		timer_arm();
 		if (!g.powered_off) {
 			kccb_process();
+#ifndef EXP_NO_EVENT_POLL
 			sched_poll();
+#endif
+			hwr_watchdog();
 			sched_run();
 		}
 		break;
 	case 1: /* MTS background task */
 		g.bg_irqs++;
 		cr_write32(CR_DBG_IRQ_BG, g.bg_irqs);
+		{
+			/* E018: which task brings the DM completion events? */
+			uint32_t pend = cr_read32(CR_EVENT_STATUS);
+
+			cr_write32(CR_DBG_BG_CTX, cr_read32(CR_MTS_BGCTX));
+			if (pend & (EV_COMPUTE_FINISHED | EV_PIXELBE_END_RENDER | EV_TA_FINISHED)) {
+				cr_write32(CR_DBG_BG_WITH_EV, cr_read32(CR_DBG_BG_WITH_EV) + 1);
+				cr_write32(CR_DBG_BG_LASTEV, pend);
+			}
+		}
 		if (!g.powered_off) {
 			kccb_process();
 			sched_poll();
@@ -151,6 +165,9 @@ void irq_dispatch(uint32_t source)
 		g.irq_irqs++;
 		cr_write32(CR_DBG_IRQ_IRQ, g.irq_irqs);
 		cr_write32(CR_DBG_IRQ_LASTEV, ev);
+		cr_write32(CR_DBG_INT_CTX, cr_read32(CR_MTS_INTCTX));
+		if (ev & EV_COMPUTE_FINISHED)
+			cr_write32(CR_DBG_IRQ_COMPUTE, cr_read32(CR_DBG_IRQ_COMPUTE) + 1);
 		if (ev)
 			cr_write32(CR_EVENT_CLEAR, ev);
 		if (!g.powered_off)

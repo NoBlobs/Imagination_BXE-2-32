@@ -3,6 +3,9 @@
 
 # E016 — how `COMPUTE_FINISHED` reaches the firmware: polling, not the MTS IRQ task (yet)
 
+> **Superseded by [E018](E018-irq-task-delivery.md):** the IRQ task does fire on every
+> completion. Here the 1 ms poll won the race and consumed the event first.
+
 **Question.** The spec says `MTS_DM4_INTERRUPT_ENABLE = 0x04` routes `COMPUTE_FINISHED`
 to the IRQ task (HW2). The firmware also polls `EVENT_STATUS` every 1 ms. Which path
 completed the jobs in E013?

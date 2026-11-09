@@ -10,8 +10,8 @@
 | GP | 0 | firmware internal | – | – |
 | TDM | 1 | transfer | `TQ_TDM` (206), `TQ_2D` (208) | retired at once (`MAIN_172`); not seen from Mesa on this GPU |
 | GEOM | 2 | geometry / TA | `GEOM` (201) | retired at once |
-| FRAG | 3 | fragment / 3D | `FRAG` (203), `FRAG_PR` (204), `TQ_3D` (202) | retired at once. `TQ_3D` is programmed with `-DEXP_TQ3D`, but the 3D pipe does not start ([E014](logRefs/E014-tq3d-kick-does-not-start.md)). |
-| CDM | 4 | compute | `CDM` (205) | **works**: `dEQP-VK.compute.pipeline.basic`, 9 pass ([E013](logRefs/E013-gpu-units-init-compute-pass.md)) |
+| FRAG | 3 | fragment / 3D | `FRAG` (203), `FRAG_PR` (204), `TQ_3D` (202) | `FRAG`/`FRAG_PR` retired at once. `TQ_3D` is kicked: the pipe starts, but its output faults at address 0 and HWR discards it ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)). |
+| CDM | 4 | compute | `CDM` (205) | **works**: `dEQP-VK.compute.pipeline.basic`, 67/82 pass ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
 
 A task that is not implemented is **retired immediately**: its updates still run and
 the host's fences signal. The host therefore never hangs, but the work is not done.
@@ -152,28 +152,43 @@ GPU, so the host leaves them unused (`docsClean/kick-compute-and-3d.md`, answer 
    catalogue. Without it the first job of a new memory context could fault on its
    USC code ([E015](logRefs/E015-slc-flush-before-mmu-inval.md)).
 
-## Transfer kick TQ_3D (experimental, `-DEXP_TQ3D`)
+## Transfer kick TQ_3D
 
 `kick_tq3d()` follows the transfer table of `kick-compute-and-3d.md`. The spec's `cmd+N`
-offsets are relative to the cCCB header, so `cmd+0x30` = `regs+0`. The full field map
-and the result are in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
+offsets are relative to the cCCB header, so `cmd+0x30` = `regs+0`. The full field map is
+in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
 
-1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101`, bind the BIF slot for DM 3
-   (`CAT_BASE_INDEX` bits 10:8), and program the transfer, ISP and PBE registers.
-2. Write `ISP_RENDER = regs.isp_render`, then the start, RMW `| 0x10`.
-3. Completion is expected on `PIXELBE_END_RENDER`; the finish trace is `MAIN_4` "3D
-   Transfer finished".
+1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101` and bind the BIF slot for DM 3
+   (`CAT_BASE_INDEX` bits 10:8). The binding is mandatory before any ISP or PBE write.
+2. Program the transfer, ISP and PBE registers. `0x06B0` (PDS_BGRND2) is not written.
+   PBE: planar `WORD0_MRTn = 0x1510 + 8n`, `WORD1_MRTn = 0x1550 + 8n` (compile with
+   `PBE_LAYOUT=0` for contiguous).
+3. Launch with two writes: `ISP_RENDER = regs.isp_render`, then RMW `| 0x10`, then
+   **`BCAST[0x0F00] = 1`**, the real launch and the last write.
+4. Completion: `PIXELBE_END_RENDER`; finish trace `MAIN_4` "3D Transfer finished".
 
-The 3D pipe does not start (`PERF_3D_CYCLE` stays 0). This is question Q8. Without
-the knob, `TQ_3D` tasks are retired at once.
+State ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)): the pipe starts, then writes to
+address 0 (Q12). HWR discards the job.
 
-## MMU faults
+## MMU faults and hardware recovery (`hwr.c`)
 
-When `EVENT_STATUS.MMU_PAGE_FAULT` is seen, by the IRQ task or by the poll,
-`kick_events()` calls `mmu_fault()`, which does the following:
-1. Emits `HWR_80` "BIF0 page fault detected (… MMU Status … Req Status …)".
-2. Clears the event and sets `HWR_GENERAL_LOCKUP` in `sysdata.hwr_state_flags`.
-3. Retires every busy DM, so the host gets its fences.
+A recovery has two triggers:
+- `EVENT_STATUS.MMU_PAGE_FAULT`, seen by the IRQ task or by a poll. `kick_events()`
+  first emits `HWR_80` with the MMU and request status.
+- The 2 s watchdog: `hwr_watchdog()`, run on every timer tick, finds a DM busy longer
+  than that.
 
-There is no hardware reset yet (Q11), so the faulting unit may stay busy until the next
-power cycle.
+`hwr_recover()` then runs the spec's reset sequence:
+1. Hold scheduling: clear `HARDWARE_OK`, set `RESET_IN_PROGRESS`.
+2. SLC flush and invalidate, wait for idle.
+3. `PM_PARTIAL_RENDER_ENABLE = 0`.
+4. Pulse `SOFT_RESET` through broadcast: `0x13FFFC1D`/`0xFFEFFE00`, then 0. This leaves
+   the MIPS and the MTS wrapper alone.
+5. `gpu_power_on()`, `gpu_units_init()`, `bif_rebuild()`.
+6. Clear every event and discard the command of each busy DM. Its updates still run, so
+   the host sees its fences.
+7. `HARDWARE_OK | DM_RUNNING_OK`, then reschedule.
+
+The traces are `HWR_32`, `HWR_28`, `HWR_61`, `MAIN_27`, `HWR_14`, `HWR_25` and `HWR_62`. A
+recovery takes about 0.28 ms ([E019](logRefs/E019-hwr-and-compute-basic-67.md)). Not yet
+done: the HWR info buffer for the host and the FWCCB context-reset notification.

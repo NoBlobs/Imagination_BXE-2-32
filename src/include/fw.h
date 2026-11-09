@@ -92,6 +92,7 @@ struct fw_state {
 	bool kick_pending;             /* set by BG/IRQ, work for the scheduler */
 	uint32_t config_flags;
 	uint32_t timer_irqs, bg_irqs, irq_irqs, spurious_irqs;
+	uint32_t cdm_kicks;
 };
 
 extern struct fw_state g;

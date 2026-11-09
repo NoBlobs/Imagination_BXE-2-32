@@ -49,6 +49,17 @@ The firmware reaches registers in three ways:
 | `0xF308` | multicore system | S | read before a compute kick |
 | `0xF330` | multicore compute control | S | `execute_count << 8 \| 1` (broadcast) |
 
+## Kick and recovery registers added in this round
+
+| Offset | Src | Use |
+|---|---|---|
+| `0x0F00` | S | pixel-pipe launch: `BCAST = 1`, the last write of a 3D/TQ kick ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)) |
+| `0x0F08` `ISP_RENDER` | P, S | `regs.isp_render`, then RMW `\| 0x10` before the launch |
+| `0xF310` `MULTICORE_FRAGMENT_CTRL_COMMON` | P | `0x101` (execute count 1, GPU 0) |
+| `0x1510 + 8n` / `0x1550 + 8n` | S, E | PBE `WORD0`/`WORD1` of MRT n (planar reading) |
+| `0x0100`/`0x0104` `SOFT_RESET` | P, S | HWR pulse `0x13FFFC1D`/`0xFFEFFE00` → 0 ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
+| `0x0338` `PM_PARTIAL_RENDER_ENABLE` | P | 0 during HWR |
+
 ## GPU bring-up registers (spec, `boot-gpu-init.md`)
 
 | Offset | Src | Value written by `gpu_init.c` |
