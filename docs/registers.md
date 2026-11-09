@@ -73,7 +73,13 @@ The firmware reaches registers in three ways:
 | `0x0220` / `0x0224` | O | `0x0220` reads 0 with the original firmware; `0x0224` = local free-list loaded stack top | spec observation |
 | `0x0240` / `0x0244` | O | `0x80_0000_0000` (general heap base), the first change at a first load | spec observation (Q16g) |
 | `0x0348` / `0x0350` | O, E | local free list **live** stack pointer, PM context 0 / 1; stays 0 on our firmware (E032) | spec (Q16g) + E032 |
-| `0x0398` / `0x039C` | O | local free list allocated page count / allocated MMU page count | spec observation |
+| `0x0390` / `0x0394` | D, E | local free list allocated PB / MMU page counts loaded into PM context 0; not live (read 0 after the TA) | E035 statement + E036 |
+| `0x0398` / `0x039C` | D, E | the same for PM context 1 (corrected: earlier docs had them as context 0) | E035 statement |
+| `0x0208` / `0x0200` | D, E | **local free-list load command**, PM context 0 / 1: write 1 after the value registers, poll bit 0 = 0 | E035 (works) |
+| `0x20B0` / `0x20A8` | D, E | **global free-list load command**, PM context 0 (bank `0x20B8`) / 1 (bank `0x2078`) | E035 (works) |
+| `0x0230` / `0x0234` | D, E | local free-list stack top of PM context 1, 64-bit, top from bit 22 | E035 statement + E036 |
+| `0x0350` | O, E | local free list live SP, PM context 1; loads with `0x0200` | spec + E036 |
+| `0x0280` / `0x02D0` | O, E | ALIST / MLIST stack pointer of PM context 1; not writable, stays 0 after writing `0x0278`/`0x02C8` (E036) | spec + E036 |
 | `0x02A0` / `0x02A8` | O, E | `PM_PAGE_MANAGEOP`: 1 pauses TA allocation while the PM state changes; `0x02A8` acks it within one read | spec observation (trace) + E032 |
 | `0x02D8` / `0x02E0` | O, E | MLIST base (`pm_mlist_dev_addr`) of PM context 0 / 1 | spec observation + E028 guess |
 | `0x0420` | O, E | geometry kick counter (+1 per kick) | spec + E029 |

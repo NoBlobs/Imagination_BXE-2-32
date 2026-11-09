@@ -130,6 +130,7 @@ void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 	s->finish_sfid = finish_sfid;
 	s->kick_time = gpu_timer();
 	s->bif_slot = slot;
+	s->hwrt = 0;            /* set by the geometry / fragment kick after this call */
 	cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) | (1u << dm));
 }
 
@@ -368,6 +369,9 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		/* experimental: runs, but the PM hands out no pages yet (E028) */
 		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
 		return kick_geom(ctxaddr, ctx, hdr, payload, cmd_off);
+	case CCB_CMD_FRAG:
+		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
+		return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off);
 #endif
 #ifdef EXP_DUMP_RENDER
 	case CCB_CMD_GEOM:
@@ -469,6 +473,8 @@ void kick_events(uint32_t ev)
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
 		if (d == DM_GEOM)
 			geom_done(s);
+		else if (d == DM_FRAG && s->hwrt)
+			frag_done(s);
 		TRACE(s->finish_sfid);
 		sched_dm_done(d);
 	}

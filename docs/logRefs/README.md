@@ -53,5 +53,7 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E032](E032-pm-live-sp-load-variants.md) | 2026-11-09 | Q16g applied; load variants of the PM live SPs | none loads `0x20C8`/`0x0348`; `0x02A8` acks `PM_PAGE_MANAGEOP`; writes between the handshakes fault at address 0 (Q16h) |
 | [E033](E033-pm-first-load-flags.md) | 2026-11-09 | Q16h first-load PM registers | idle PM state equals the original except `0x20F8`; with `0x20F8`/`0x03D0`/`0x03D4` written the live SPs still stay 0 (Q16i) |
 | [E034](E034-pm-copy-q16i-variants.md) | 2026-11-09 | Q16i answer applied | `0xF320` back to 0, unit values and catalogue index matched; the live SPs still stay 0; the missing step changes no value (Q16j) |
+| [E035](E035-pm-freelist-load-commands.md) | 2026-11-09 | Free-list load commands (Q16j answer) | write 1, wait bit 0 = 0 after the value registers: the PM loads the free lists, allocates, and the **TA finishes** |
+| [E036](E036-first-3d-render.md) | 2026-11-09 | Fragment kick with PM context 1 load | **first correct image**; the PM does not free the pages and the next draw faults (Q16k) |
 
 The raw data is in [data/](data/).

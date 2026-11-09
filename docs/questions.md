@@ -28,7 +28,39 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16j — The exact register writes from `Activate MemCtx` to `Load Freelist` (blocking)
+#### Q16k — Loading the ALIST/MLIST stack pointers of PM context 1, and freeing the pages after the 3D (blocking)
+
+The geometry finishes, and **the first draw of a run renders correctly** 
+([E035](logRefs/E035-pm-freelist-load-commands.md),
+[E036](logRefs/E036-first-3d-render.md)). At the fragment kick we load PM context 1:
+- local `0x0218`/`0x0230`/`0x0398`, then the command `0x0200`;
+- global `0x2078` bank, then the command `0x20A8`;
+- `0x02B0 = 0`, `0x02E0`, `PM_CAT_BASE_*1` = the catalogues the geometry built;
+- the geometry's ALIST/MLIST SPs written to `0x0278`/`0x02C8`.
+
+Problems:
+- **`0x0280`/`0x02D0` stay 0.** They are not writable.
+- After the 3D, the local live SP of context 1 (`0x0350`) **stays `0x10`**, where the
+  original climbs back to `0x1F`. The pages are never freed.
+- The next draw's geometry then writes at GPU address `0x10` and faults.
+
+1. How are the ALIST/MLIST stack pointers of a PM context loaded (trace RTD 12, `Loading
+   stack-pointers for 1 (0:MidTA,1:3D) on context 1, MLIST = …, ALIST = …`)? Which value
+   registers, which **load command** register (like `0x0208`/`0x20B0`), and which poll?
+   Is the same mechanism used for context 0 at a geometry kick that is not the first?
+2. How does the PM free the render's pages after the 3D (Q20)? Is it automatic once
+   context 1 holds the right ALIST/MLIST, or does the firmware issue a command (at the
+   kick or at `PIXELBE_END_RENDER`)? What does the firmware wait for before it reads the
+   free lists back?
+3. Is there a **store** command that captures a context's live free-list state (`Store
+   Freelist … for PMDM0` at the fragment kick, and at HWRTData cleanup), or does the
+   firmware read the live registers directly? If it reads them, which registers hold the
+   local live allocated-page counts?
+4. Must anything be reset in PM context 0 or 1 between two renders (for example
+   `PM_CAT_BASE_*`, `0x03D0`/`0x03D4`, or the HWRTData state) before the next geometry
+   load?
+
+#### Q16j — The exact register writes from `Activate MemCtx` to `Load Freelist` (answered: free-list load commands, E035)
 
 With the Q16i answer applied ([E034](logRefs/E034-pm-copy-q16i-variants.md)), our register
 state at the geometry kick matches every value the spec observed in the original:

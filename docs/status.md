@@ -31,8 +31,8 @@ Mesa `pvr`.
 
 | Item | State |
 |---|---|
-| Geometry kick | experimental (`-DEXP_TA`): the pipe starts, but the PM hands out no pages ([E028](logRefs/E028-ta-kick-bringup.md)); by default geometry is retired at once |
-| Fragment (3D) kick | not implemented (needs the TA output); retired at once |
+| Geometry kick | experimental (`-DEXP_TA`): the PM loads the free lists and the TA finishes ([E035](logRefs/E035-pm-freelist-load-commands.md)); by default geometry is retired at once |
+| Fragment (3D) kick | experimental (`-DEXP_TA`, `src/frag.c`): the **first render of a process draws correctly** ([E036](logRefs/E036-first-3d-render.md)); the PM never frees the render's pages, so the next render faults (Q16k). By default retired at once |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
@@ -63,6 +63,8 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E036 | first 3D render: geometry + fragment kick draw a correct triangle (`simple_draw_triangle_list`, `api.smoke.triangle` pass); the PM never frees the pages, so later draws fault (Q16k) |
+| E035 | free-list load commands (`0x0208`/`0x0200`/`0x20B0`/`0x20A8`): the PM loads its live SPs, allocates, and the TA finishes |
 | E034 | Q16i applied: `0xF320` = 0, first-load unit values, catalogue index after the PM writes; register state now matches the original, live SPs still 0 (Q16j) |
 | E033 | Q16h first-load registers `0x20F8`, `0x03D0`/`0x03D4` written; idle PM state now equals the original; live SPs still 0: the copy step is unknown (Q16i) |
 | E032 | Q16g applied (bank `0x20B8`, `0x0240`); six load variants: live SPs `0x20C8`/`0x0348` stay 0; `0x02A8` = pause ack; handshakes around the writes fault at 0 (Q16h) |

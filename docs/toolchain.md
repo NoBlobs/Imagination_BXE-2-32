@@ -100,6 +100,12 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | `EXP_NO_F320` | with `EXP_TA`: no `MULTICORE_GEOMETRY_CTRL_COMMON` write (the original keeps it 0) (E034) |
 | `EXP_UNIT_EXTRA` | with `EXP_TA`: write the first-load unit values `0x1500`, `0x1780`, `0x1788`, `0x178C`, `0x0FA0`, `0x17B8` (E034) |
 | `EXP_IDX_AFTER` | with `EXP_TA`: set the TA catalogue index only after the PM writes (E034) |
+| `EXP_NO_FL_LOAD` | with `EXP_TA`: leave out the free-list load commands (E035) |
+| `EXP_FRAG_RGN` | with `EXP_TA`: write `0x0F28` from `rgn_header_size` in the fragment kick (E036, untested) |
+| `EXP_FRAG_ISP_RENDER=v` | with `EXP_TA`: write `ISP_RENDER = v` just before the fragment launch (E036, untested) |
+
+**Working render build** (E036): `make EXP="-DEXP_TA -DEXP_HS_MODE=0 -DEXP_NO_F320"`. It
+draws the first render of a process; later renders fault until Q16k is answered.
 | `EXP_MLIST_REG`, `EXP_VDM_STATE_REG`, `EXP_TA_STATE_REG` | override the guessed register offsets used by `geom.c` (0 = do not write) |
 | `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |
 | `EXP_NO_PDS_BASE` | leave the PDS exec base at 0, to reproduce the E006 page fault (E025) |

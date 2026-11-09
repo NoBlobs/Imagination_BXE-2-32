@@ -55,6 +55,10 @@
 #define CR_PM_VHEAP_TABLE        0x0248
 #define CR_PM_HANDSHAKE_A        0x0250
 #define CR_PM_HANDSHAKE_B        0x0258
+#define CR_PM_FL_LOAD_LOCAL0     0x0208  /* free-list load commands (E035): write 1, */
+#define CR_PM_FL_LOAD_LOCAL1     0x0200  /* wait for bit 0 = 0 */
+#define CR_PM_FL_LOAD_GLOBAL0    0x20B0
+#define CR_PM_FL_LOAD_GLOBAL1    0x20A8
 #define CR_PM_ALIST_SP           0x0270
 #ifndef EXP_MLIST_REG
 #define EXP_MLIST_REG            0x02D8  /* PM_MLIST0_BASE candidate (E008 mask + Mesa layout), E028 */
@@ -111,6 +115,7 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	const uint8_t *fl_local = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS)) : NULL;
 	const uint8_t *gstate = fwptr(ctx->context_state_addr);
 	uint32_t slot;
+	[[maybe_unused]] bool ok_local = false, ok_global = false;
 
 	if (!hwrt || !common || !fl_local)
 		return false;   /* cannot run without a render target: retire */
@@ -192,6 +197,18 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #else
 	pm_w64(CR_PM_FL_STACKTOP - 4, (uint64_t)rd32(fl_local, FL_STACK_TOP) << 32);
 #endif
+	/* allocated PB / MMU page counts of the local free list, PM context 0 (E035) */
+	cr_write32(0x0390, rd32(fl_local, 32));
+	cr_write32(0x0394, rd32(fl_local, 36));
+#ifndef EXP_NO_FL_LOAD
+	/*
+	 * E035: the PM copies a free list into its live state only on a load
+	 * command: write 1, wait for bit 0 to clear. Local free list first.
+	 */
+	cr_write32(CR_PM_FL_LOAD_LOCAL0, 1);
+	ok_local = cr_poll32(CR_PM_FL_LOAD_LOCAL0, 1, 0, 10000);
+	TRACE(SFID_DBG_4, 0xE0280B50u, ok_local, cr_read32(0x0348));
+#endif
 	{
 		/*
 		 * Global free list of PM context 0 (answers to Q16e-Q16g),
@@ -225,6 +242,11 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #endif
 			pm_w32(0x20D0, rd32(fl_global, 32));
 			pm_w32(0x20D4, rd32(fl_global, 36));
+#ifndef EXP_NO_FL_LOAD
+			cr_write32(CR_PM_FL_LOAD_GLOBAL0, 1);
+			ok_global = cr_poll32(CR_PM_FL_LOAD_GLOBAL0, 1, 0, 10000);
+			TRACE(SFID_DBG_4, 0xE0280B51u, ok_global, cr_read32(0x20C8));
+#endif
 #ifdef EXP_PM_PAUSE
 			TRACE(SFID_DBG_4, 0xE0280B21u, cr_read32(0x20C8), cr_read32(0x02A8));
 			cr_write32(0x02A0, 0);
@@ -240,8 +262,6 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifdef EXP_TOP_FIRST
 	pm_w64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));   /* base again, after the top */
 #endif
-	cr_write32(0x0398, rd32(fl_local, 32));
-	cr_write32(0x039C, rd32(fl_local, 36));
 	cr_write64(CR_BIF_PM_CAT_BASE_VCE0, rd64(hwrt, HWRT_VCE_CAT_BASE));
 	cr_write64(CR_BIF_PM_CAT_BASE_TE0, rd64(hwrt, HWRT_TE_CAT_BASE));
 	cr_write64(CR_BIF_PM_CAT_BASE_ALIST0, rd64(hwrt, HWRT_ALIST_CAT_BASE));
@@ -354,5 +374,11 @@ void geom_done(struct dm_state *s)
 		return;
 	*(uint64_t *)(hwrt + HWRT_ALIST_SP) = cr_read32(CR_PM_ALIST_SP);
 	*(uint32_t *)(hwrt + HWRT_MLIST_SP) = cr_read32(CR_PM_MLIST_SP);
+	/* E036: the catalogues the PM built, for the fragment's PM context 1 */
+	*(uint64_t *)(hwrt + 40) = cr_read64(CR_BIF_PM_CAT_BASE_VCE0);    /* vce_last_cat_base[0] */
+	*(uint64_t *)(hwrt + 104) = cr_read64(CR_BIF_PM_CAT_BASE_TE0);    /* te_last_cat_base[0] */
+	*(uint64_t *)(hwrt + 144) = cr_read64(CR_BIF_PM_CAT_BASE_ALIST0); /* alist_last_cat_base */
+	TRACE(SFID_DBG_9, 0xE0360A00u, cr_read32(0x0348), cr_read32(0x0390), cr_read32(0x0394),
+	      cr_read32(0x20C8), cr_read32(0x20D8), cr_read32(0x20E0), cr_read32(CR_BIF_PM_CAT_BASE_TE0));
 	*(uint32_t *)(hwrt + HWRT_STATE) = RTDATA_STATE_GEOM_FINISHED;
 }
