@@ -133,6 +133,54 @@ Other answers:
   snapshot, and `0x03E0` read 1 throughout. A separate PM "context select" or "start"
   register was not identified (`PENDING`).
 
+#### PM allocation follow-up (answers Q16e, O)
+
+A second `bigpb` run on the open v1.1 image sampled `0x0200–0x0800` and `0x2000–0x2200` at
+every freelist, OOM, grow and kick event. The global freelist's base, size and stack pointer
+change hundreds of times in that run, which makes matching possible.
+
+**1. Global freelist registers.** They are in the `0x2000` block, as **two banks with a
+stride of `0x40`**: PM context 0 at `0x2078`, PM context 1 at `0x20B8`. The trace lines used
+are `UFL-TA-Base`/`UFL-3D-Base`, `Freelist update completed` and `OOM: Resumed TA`.
+
+| Bank offset | PM ctx 0 | PM ctx 1 | Holds | Evidence |
+|---|---|---|---|---|
+| `+0x00`/`+0x04` | `0x2078`/`0x207C` | `0x20B8`/`0x20BC` | **global freelist base** (64-bit) | equals the trace base in 24 of 37 snapshots each; the misses are snapshots taken during a base change |
+| `+0x18` | `0x2090` | `0x20D0` | **allocated PB pages** ("4PB" / `Alloc Page Count`) | exactly 11212 at a grow update; tracks the trace afterwards |
+| `+0x1C` | `0x2094` | `0x20D4` | **allocated MMU pages** ("4PT" / `Alloc MMU Page Count`) | equal to the trace "4PT" (19, 26, 124…) |
+| `+0x28` | `0x20A0` | `0x20E0` | same value as `+0x1C` | 12 of 13 matches |
+| `+0x08`, `+0x10`, `+0x20` | `0x2080`, `0x2088`, `0x2098` | `0x20C0`, `0x20C8`, `0x20D8` | not identified; they change with the freelist | the global **stack pointer** printed by the trace (`SP = …`) was **not** found as a plain value in this block (`TO CONFIRM`) |
+
+The **local** freelist has no copy in the `0x2000` block. Its registers are the
+`0x0210`/`0x0218`, `0x0224` and `0x0398`/`0x039C` given above.
+
+**2. Starting the PM.** `PM_PAGE_MANAGEOP` (`0x02A0`) read **0 in all 37 snapshots**,
+including while the geometry was running and allocating. It goes to 1 only briefly, around
+freelist updates (`PM pause/unpause TA ALLOC`, see
+[partial-render-spm](partial-render-spm.md)). Nothing indicates that the firmware writes it
+to start allocation on a first kick: 0 means "not paused".
+
+The public trace prints `CONTEXT_PB_BASE set to 0x…` when freelists are loaded:
+- `0x3` at the geometry load, together with `FL different between TA/3D: local: 1, global: 1`;
+- `0x0` at the fragment load, when TA and 3D freelists are the same.
+
+Register **`0x02B0`** held this same value in **73 of 75 snapshots** across three runs. It is
+therefore the register behind `CONTEXT_PB_BASE` (`TO CONFIRM` the bit meaning: the observed
+pairing suggests bit 0 = local and bit 1 = global freelist differ between the two PM
+contexts).
+
+**3. `0x0D00`.** With the original firmware the values seen were `0x30`, `0x34` and `0x35`
+while geometry was running, `0x3F` after jobs, and 0/1/4/5 at other moments. **`0x0F` was
+never observed**: in the original, bits 4 and 5 are set while the geometry runs. Which units
+these bits stand for is not established.
+
+**4. Write-ordered list.** Not provided. The complete ordered sequence of the original's
+register writes would be a transcription of its kick routine, which the clean-room rules
+exclude, and the observation cannot produce it anyway. What this spec gives is the
+registers, their values and sources, and the ordering constraints the hardware imposes.
+Registers that are written and then self-clear during the kick are, by construction,
+invisible to these snapshots (`PENDING`).
+
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
   - `CR[0x258] = 1`, then **poll** `CR[0x258]` until bit 0 = 0.
