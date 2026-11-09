@@ -76,8 +76,11 @@ The firmware reaches registers in three ways:
 | `0x02D8` / `0x02E0` | O, E | MLIST base (`pm_mlist_dev_addr`) of PM context 0 / 1 | spec observation + E028 guess |
 | `0x0420` | O, E | geometry kick counter (+1 per kick) | spec + E029 |
 | `0x02B0` | O | `CONTEXT_PB_BASE`: `3` at the geometry load, `0` at the fragment load | spec observation |
-| `0x2078` / `0x20B8` | O | global free list bank of PM context 0 / 1 (stride `0x40`): `+0x00` base, `+0x18` alloc PB pages, `+0x1C` (= `+0x28`) alloc MMU pages | spec observation |
-| `0x2080` / `0x20C0` | E | global free list stack pointer (guess: 22-bit field) | E030 |
+| `0x2078` / `0x20B8` | O | global free list bank of PM context 0 / 1 (stride `0x40`), `+0x00` = base | spec observation |
+| `0x2080` / `0x20C0` | O | `+0x08` of the global bank: not identified (`0x20`, `0x108`, `0x109`) | spec observation |
+| `0x2088` / `0x20C8` | O, E | global free list **live** stack pointer; read-only for the firmware (E031) | spec + E031 |
+| `0x2090` / `0x2094` | O | global PB / MMU page counts at the last load/store | spec observation |
+| `0x2098` / `0x20A0` | O, E | global **live** allocated PB / MMU pages; read 0 after a write (E031) | spec + E031 |
 | `0x0C30/0x0C34`, `0x0C48`, `0x0C70`, `0x0C90/0x0C94`, `0x0CA0` | O | constants `2/3`, `8`, `3`, `0x3089705F` ×2, `0x10` | spec observation |
 | `0x0D00` | O, E | status: `0x3F` idle, `0x0F` while our stalled TA runs | observed |
 | `0x0248` | O | `PM_VHEAP_TABLE` ← `vheap_table_dev_addr` | spec observation |

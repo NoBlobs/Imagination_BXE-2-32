@@ -49,5 +49,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E028](E028-ta-kick-bringup.md) | 2026-11-09 | First TA kick | canary method finds `0x0CB0` = TA context-state base; geometry runs and fetches its first 64 B, but the PM hands out no pages |
 | [E029](E029-ta-pm-registers-from-answers.md) | 2026-11-09 | TA with the Q16b/Q16c answers | local FL counts and geometry constants applied, `0x0420` counts kicks as in the original; still no PM allocation; global-FL guess in the 0x2000 block changes nothing (Q16e) |
 | [E030](E030-ta-global-freelist-pb-base.md) | 2026-11-09 | TA with the global FL bank and `CONTEXT_PB_BASE` | all identified PM registers programmed; still no allocation; `0x0D00 = 0x0F` is the inverse of the original's running state; PM catalogue setup is the remaining gap (Q16f) |
+| [E031](E031-pm-live-stack-pointers.md) | 2026-11-09 | Global SP `0x2088` and live counters | these live registers ignore writes and stay 0; PM catalogues stay 0 too: the PM sees empty free lists (Q16g) |
 
 The raw data is in [data/](data/).

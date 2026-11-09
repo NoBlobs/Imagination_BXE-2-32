@@ -130,20 +130,20 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	{
 		/*
 		 * Global free list of PM context 0 (answer to Q16e): bank at 0x2078,
-		 * +0x00 base, +0x18/+0x1C allocated PB / MMU pages, +0x28 = +0x1C.
-		 * The stack-pointer register is not identified: 0x2080 (22-bit in
-		 * E008, pair 0x20C0 in bank 1) is our candidate (E030).
+		 * see the bank layout below.
+		 * The stack pointer is 0x2088 (answer to Q16f; 0x2080 was wrong).
 		 */
 		const uint8_t *fl_global = fwptr(rd32(hwrt, HWRT_FREELISTS + 4));
 
 		if (fl_global) {
+			/* bank 0: +0x00 base, +0x10 live SP, +0x18/+0x1C counts at the last
+			 * load/store, +0x20/+0x28 live allocated PB/MMU pages (Q16f answer) */
 			cr_write64(0x2078, rd64(fl_global, FL_CURRENT_DEV_ADDR));
-			cr_write32(0x2090, rd32(fl_global, 32));        /* allocated_page_count */
-			cr_write32(0x2094, rd32(fl_global, 36));        /* allocated_mmu_page_count */
+			cr_write32(0x2088, rd32(fl_global, FL_STACK_TOP));
+			cr_write32(0x2090, rd32(fl_global, 32));
+			cr_write32(0x2094, rd32(fl_global, 36));
+			cr_write32(0x2098, rd32(fl_global, 32));
 			cr_write32(0x20A0, rd32(fl_global, 36));
-#ifndef EXP_NO_GLOBAL_SP
-			cr_write32(0x2080, rd32(fl_global, FL_STACK_TOP));
-#endif
 		}
 		/* CONTEXT_PB_BASE (0x02B0) = 3 at the geometry load (answer to Q16e) */
 		cr_write32(0x02B0, 3);

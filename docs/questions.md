@@ -28,6 +28,36 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q16g — How does the firmware load the free lists into the PM's live state? (blocking)
+
+After the Q16f answer ([E031](logRefs/E031-pm-live-stack-pointers.md)):
+- The live global stack pointer `0x2088` and the live counter `0x2098` **read 0 although
+  we write them**. `0x2088` is also not writable in our E008 probe.
+- `PM_CAT_BASE_{VCE,TE,ALIST}0` **stay 0** for the whole job. There is no MMU fault in
+  any bank.
+- So the PM has taken no page at all: its live stack pointers are 0, and the free lists
+  look empty to it.
+
+Written before the PM handshakes:
+- local: `0x0210` base, `0x0224` loaded top, `0x0398`/`0x039C` counts;
+- global bank: `0x2078` base, `0x2090`/`0x2094` counts;
+- `0x02B0 = 3`, VHeap `0x0248`, MLIST `0x02D8`;
+- then `0x0250 = 1` / poll bit 0 = 1, `0x0258 = 1` / poll bit 0 = 0.
+
+Both polls succeed.
+
+1. What copies the loaded values into the live stack pointers: the `0x0250`/`0x0258`
+   handshakes, or another register?
+   - What is `0x2080` (`+0x08` of the bank: `0x20`, `0x108`, `0x109`)? Is it the source of
+     the live SP, a page count, or a command?
+   - Is there an equivalent for the local free list?
+2. Does the PM read anything from **memory** at load time? For example the free list's
+   page stack at the base address, or a header the host prepares that our firmware should
+   update first.
+3. Right after a geometry load in the original, before the TA trigger, what do `0x2088`
+   and the (unidentified) live local stack pointer read? If they are already the stack top
+   by then, which register write made them so?
+
 #### Q16f — PM page catalogues on a first kick (blocking)
 
 With every PM register the spec identified now programmed as observed
