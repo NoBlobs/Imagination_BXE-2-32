@@ -219,8 +219,9 @@ A recovery has two triggers:
 5. `gpu_power_on()`, `gpu_units_init()`, `bif_rebuild()`.
 6. Clear every event and discard the command of each busy DM. Its updates still run, so
    the host sees its fences.
-7. `HARDWARE_OK | DM_RUNNING_OK`, then reschedule.
+7. Write an HWR log entry and send a FWCCB `CONTEXT_RESET_NOTIFICATION` for each
+   discarded command ([E025](logRefs/E025-stats-and-reset-notification.md)).
+8. `HARDWARE_OK | DM_RUNNING_OK`, then reschedule.
 
 The traces are `HWR_32`, `HWR_28`, `HWR_61`, `MAIN_27`, `HWR_14`, `HWR_25` and `HWR_62`. A
-recovery takes about 0.28 ms ([E019](logRefs/E019-hwr-and-compute-basic-67.md)). Not yet
-done: the HWR info buffer for the host and the FWCCB context-reset notification.
+recovery takes about 0.28 ms ([E019](logRefs/E019-hwr-and-compute-basic-67.md)). The host is told about every discarded job (HWR log and FWCCB notification, E025).

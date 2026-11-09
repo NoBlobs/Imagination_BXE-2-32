@@ -24,6 +24,7 @@ Mesa `pvr`.
 | **Event delivery through the MTS IRQ task** | HW2 on every completion ([E018](logRefs/E018-irq-task-delivery.md)); the polls are a backstop |
 | **HWR** | MMU fault or watchdog at the context's `max_deadline_ms` (30 s) → SOFT_RESET pulse → units re-init → discard; ~0.28 ms; 13 recoveries in one dEQP run without a hang ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
 | **TQ_3D (transfer) jobs** | correct: `api.fill_and_update_buffer` **72/72**, `api.copy_and_blit.core.buffer_to_buffer` **8/8**, image compute cases pass ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)) |
+| **Statistics and robustness** | GPU utilisation and time correlation, HWR log, FWCCB context-reset notification (overrun and page fault) decoded by the host ([E025](logRefs/E025-stats-and-reset-notification.md)) |
 | **Per-DM completion flush** | front-end, USC/PDS, TPU, MCU fence and SLC flush before every fragment/transfer/compute job is retired ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)) |
 
 ## Not working yet
@@ -31,7 +32,6 @@ Mesa `pvr`.
 | Item | State |
 |---|---|
 | Geometry / fragment / TDM kicks | not implemented; retired at once |
-| HWR info buffer, context-reset notification (FWCCB) | not implemented (the host is not told about a discarded job) |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
@@ -61,6 +61,8 @@ Mesa `pvr`.
 | E021 | watchdog must follow `max_deadline_ms`; indirect_dispatch 24/24, builtin_var 11/11 |
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
+| E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E025 | statistics and the HWR log are published; reset notifications reach the host log (`fault address=26c0`); the mainline host only logs them |
 
 ## Next steps
 
@@ -68,5 +70,4 @@ Mesa `pvr`.
    `0x0F00` launch. Needs the PM/HWRTData load.
 2. Geometry (TA) kick with PM, free lists and partial render (`kick-geometry-ta.md`,
    `partial-render-spm.md`). Together with the 3D kick this opens `dEQP-VK.draw.*`.
-3. HWR info buffer and FWCCB context-reset notification (Vulkan device loss).
 4. Broader dEQP runs: the rest of `api.copy_and_blit.*` (images, blits) and `api.*`.

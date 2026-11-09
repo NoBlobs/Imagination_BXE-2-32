@@ -23,13 +23,40 @@
 
 static uint32_t hwr_counter;
 
-void hwr_recover(uint32_t reason)
+/* ext_job_ref of the command a DM is running (job ref reported to the host) */
+static uint32_t running_job_ref(const struct dm_state *s)
+{
+	struct fwcommoncontext *ctx = fwptr(s->ctx);
+	uint8_t *ccb = ctx ? fwptr(ctx->ccb_fw_addr) : NULL;
+
+	if (!ccb)
+		return 0;
+	return ((struct ccb_cmd_header *)(ccb + s->cmd_off))->ext_job_ref;
+}
+
+void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 {
 	uint32_t busy = 0;
+	uint32_t ev = cr_read32(CR_EVENT_STATUS);
+	uint64_t reset_start = gpu_timer();
+	struct {
+		fwaddr_t ctx;
+		uint64_t kick_time, pc;
+		uint32_t job_ref, pid;
+	} lost[DM_MAX];
 
-	for (uint32_t d = 0; d < DM_MAX; d++)
-		if (dms[d].busy)
-			busy |= 1u << d;
+	for (uint32_t d = 0; d < DM_MAX; d++) {
+		if (!dms[d].busy)
+			continue;
+		struct fwcommoncontext *ctx = fwptr(dms[d].ctx);
+
+		busy |= 1u << d;
+		lost[d].ctx = dms[d].ctx;
+		lost[d].kick_time = dms[d].kick_time;
+		lost[d].pc = kick_bif_pc(dms[d].bif_slot);
+		lost[d].job_ref = running_job_ref(&dms[d]);
+		lost[d].pid = ctx ? ctx->pid : 0;
+	}
 
 	/* 1. hold scheduling */
 	if (g.sysdata) {
@@ -77,6 +104,26 @@ void hwr_recover(uint32_t reason)
 		TRACE(SFID_HWR_25, d);
 	}
 
+	/*
+	 * Host-visible record (HWR log) and robustness notification per lost job
+	 * (hardware-recovery.md "HWR log", "Context robustness").
+	 */
+	uint64_t reset_finish = gpu_timer();
+	bool pf = reason == HWR_REASON_MMU_FAULT;
+	uint64_t fault_addr = req_status & 0xFFFFFFFFF0ull;      /* REQ_STATUS.ADDRESS */
+
+	for (uint32_t d = 0; d < DM_MAX; d++) {
+		if (!(busy & (1u << d)))
+			continue;
+		stats_hwr_log(d, pf ? HWRTYPE_BIF0FAULT : HWRTYPE_OVERRUN,
+			      pf ? req_status : 0, pf ? mmu_status : 0, lost[d].pc, ev,
+			      lost[d].kick_time, reset_start, reset_finish, lost[d].pid);
+		stats_notify_context_reset(lost[d].ctx, d,
+					   pf ? CONTEXT_RESET_REASON_GUILTY_LOCKUP :
+						CONTEXT_RESET_REASON_GUILTY_OVERRUNING,
+					   lost[d].job_ref, lost[d].pc, pf, pf ? fault_addr : 0);
+	}
+
 	TRACE(SFID_HWR_62, hwr_counter);
 	hwr_counter++;
 	cr_write32(CR_DBG_HWR_COUNT, hwr_counter);
@@ -98,11 +145,14 @@ void hwr_watchdog(void)
 		struct fwcommoncontext *ctx = fwptr(dms[d].ctx);
 		uint32_t ms = ctx && ctx->max_deadline_ms ? ctx->max_deadline_ms :
 			      HWR_TIMEOUT_DEFAULT_MS;
+#ifdef EXP_WATCHDOG_MS
+		ms = EXP_WATCHDOG_MS;   /* E025: force the overrun path */
+#endif
 		uint64_t limit = (uint64_t)g.timer_ticks_per_ms * ms;
 
 		if (now - dms[d].kick_time > limit) {
 			TRACE(SFID_HWR_1, d, dms[d].ctx);
-			hwr_recover(HWR_REASON_LOCKUP);
+			hwr_recover(HWR_REASON_LOCKUP, 0, 0);
 			return;
 		}
 	}

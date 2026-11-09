@@ -489,3 +489,106 @@ struct cmd_transfer {
 static_assert(offsetof(struct cmd_transfer, regs) == 8);
 static_assert(offsetof(struct cmd_transfer, flags) == 184);
 static_assert(sizeof(struct cmd_transfer) == 192);
+
+/* ------------------------------------------------ statistics and HWR log */
+/* rogue_fwif_time_corr (0x28 bytes) */
+struct time_corr {
+	uint64_t os_timestamp;
+	uint64_t os_mono_timestamp;
+	uint64_t cr_timestamp;
+	uint64_t cr_delta_to_os_delta_kns;
+	uint32_t core_clock_speed;
+	uint32_t reserved;
+};
+static_assert(sizeof(struct time_corr) == 0x28);
+
+#define TIME_CORR_ARRAY_SIZE    256
+#define CRDELTA_ACCURACY_SHIFT  20
+#define GPU_UTIL_STATE_IDLE     0u
+#define GPU_UTIL_STATE_ACTIVE   1u
+#define GPU_UTIL_STATE_BLOCKED  2u
+#define GPU_UTIL_STATE_MASK     0x3ull
+
+/* rogue_fwif_gpu_util_fwcb */
+struct gpu_util_fwcb {
+	struct time_corr time_corr[TIME_CORR_ARRAY_SIZE];
+	uint32_t time_corr_seq_count;
+	uint32_t gpu_util_flags;
+	uint64_t last_word;
+	uint64_t stats_counters[3];
+};
+static_assert(offsetof(struct gpu_util_fwcb, time_corr_seq_count) == 0x2800);
+static_assert(offsetof(struct gpu_util_fwcb, last_word) == 0x2808);
+static_assert(offsetof(struct gpu_util_fwcb, stats_counters) == 0x2810);
+
+/* rogue_hwrinfo (136 bytes) with the rogue_bifinfo member of the union */
+#define HWRTYPE_OVERRUN         1u
+#define HWRTYPE_BIF0FAULT       3u
+#define FW_DM_MAX               9   /* PVR_FWIF_DM_MAX */
+
+struct hwrinfo {
+	uint64_t bif_req_status;
+	uint64_t bif_mmu_status;
+	uint64_t pc_address;
+	uint64_t bif_reserved;
+	uint64_t cr_timer;
+	uint64_t os_timer;
+	uint32_t frame_num;
+	uint32_t pid;
+	uint32_t active_hwrt_data;
+	uint32_t hwr_number;
+	uint32_t event_status;
+	uint32_t hwr_recovery_flags;
+	uint32_t hwr_type;
+	uint32_t dm;
+	uint32_t core_id;
+	uint32_t pad;
+	uint64_t cr_time_of_kick;
+	uint64_t cr_time_hw_reset_start;
+	uint64_t cr_time_hw_reset_finish;
+	uint64_t cr_time_freelist_ready;
+	uint64_t reserved[2];
+};
+static_assert(offsetof(struct hwrinfo, cr_timer) == 32);
+static_assert(offsetof(struct hwrinfo, core_id) == 80);
+static_assert(offsetof(struct hwrinfo, cr_time_of_kick) == 88);
+static_assert(sizeof(struct hwrinfo) == 136);
+
+#define HWINFO_MAX_FIRST 8
+#define HWINFO_MAX       16
+
+/* rogue_fwif_hwrinfobuf (0x920 bytes) */
+struct hwrinfobuf {
+	struct hwrinfo hwr_info[HWINFO_MAX];
+	uint32_t hwr_counter;
+	uint32_t write_index;
+	uint32_t dd_req_count;
+	uint32_t hwr_info_buf_flags;
+	uint32_t hwr_dm_locked_up_count[FW_DM_MAX];
+	uint32_t hwr_dm_overran_count[FW_DM_MAX];
+	uint32_t hwr_dm_recovered_count[FW_DM_MAX];
+	uint32_t hwr_dm_false_detect_count[FW_DM_MAX];
+};
+static_assert(offsetof(struct hwrinfobuf, hwr_counter) == 2176);
+static_assert(offsetof(struct hwrinfobuf, hwr_dm_locked_up_count) == 2192);
+static_assert(offsetof(struct hwrinfobuf, hwr_dm_false_detect_count) == 2300);
+static_assert(sizeof(struct hwrinfobuf) == 0x920);
+
+/* FWCCB CONTEXT_RESET_NOTIFICATION (rogue_fwif_fwccb_cmd_context_reset_data) */
+#define FWCCB_CMD_CONTEXT_RESET_NOTIFICATION 105u
+#define CONTEXT_RESET_FLAG_PF                (1u << 0)
+#define CONTEXT_RESET_REASON_GUILTY_LOCKUP     1u
+#define CONTEXT_RESET_REASON_GUILTY_OVERRUNING 3u
+
+struct fwccb_context_reset {
+	uint32_t server_common_context_id;
+	uint32_t reset_reason;
+	uint32_t dm;
+	uint32_t reset_job_ref;
+	uint32_t flags;
+	uint32_t pad;
+	uint64_t pc_address;
+	uint64_t fault_address;
+};
+static_assert(offsetof(struct fwccb_context_reset, pc_address) == 24);
+static_assert(offsetof(struct fwccb_context_reset, fault_address) == 32);

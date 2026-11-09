@@ -76,9 +76,18 @@ static bool any_busy(void)
 
 static void update_pow_state(void)
 {
-	if (g.forced_idle || g.powered_off)
+	bool busy = any_busy();
+
+	if (g.powered_off)
 		return;
-	pow_set_state(any_busy() ? POW_STATE_ON : POW_STATE_IDLE);
+	/* utilisation: ACTIVE while work runs or waits, BLOCKED if held by forced idle */
+	if (g.forced_idle)
+		stats_set_state(busy ? GPU_UTIL_STATE_BLOCKED : GPU_UTIL_STATE_IDLE);
+	else
+		stats_set_state(busy ? GPU_UTIL_STATE_ACTIVE : GPU_UTIL_STATE_IDLE);
+	if (g.forced_idle)
+		return;
+	pow_set_state(busy ? POW_STATE_ON : POW_STATE_IDLE);
 }
 
 void sched_init(void)

@@ -13,6 +13,7 @@ static void clock_change(void)
 	g.core_clock_hz = hz;
 	g.timer_ticks_per_ms = hz / 256 / 1000 ? hz / 256 / 1000 : 1;
 	g.count_per_ms = hz / 2 / 1000 ? hz / 2 / 1000 : 1;
+	stats_time_corr();
 	TRACE(SFID_MAIN_93, hz);
 }
 

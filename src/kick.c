@@ -89,6 +89,11 @@ static void bif_set_index(uint32_t dm, uint32_t slot)
 	cr_write32(CR_BIF_CAT_BASE_INDEX, lo);
 }
 
+uint64_t kick_bif_pc(uint32_t slot)
+{
+	return slot < BIF_SLOTS && bif_pc[slot] != ~0ull ? bif_pc[slot] : 0;
+}
+
 /* After a GPU soft reset: re-program every bound page catalogue. */
 void bif_rebuild(void)
 {
@@ -222,6 +227,9 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write64(CR_PDS_BGRND0_BASE, r->pds_bgnd0_base);
 	bcast_write64(CR_PDS_BGRND1_BASE, r->pds_bgnd1_base);
 	bcast_write64(CR_PDS_BGRND3_SIZEINFO, r->pds_bgnd3_sizeinfo);
+#ifdef EXP_TQ_FORCE_FAULT
+	fast2d = true;          /* E025: reproduce the E017 address-0 fault on purpose */
+#endif
 	if (fast2d) {
 		bcast_write64(CR_ISP_MTILE_BASE, r->isp_mtile_base);
 		bcast_write32(CR_ISP_RGN, r->isp_rgn);
@@ -323,7 +331,7 @@ static void mmu_fault(void)
 	TRACE(SFID_HWR_80, 0, (uint32_t)(mmu >> 32), (uint32_t)mmu,
 	      (uint32_t)(req >> 32), (uint32_t)req);
 	cr_write32(CR_EVENT_CLEAR, EV_MMU_PAGE_FAULT);
-	hwr_recover(HWR_REASON_MMU_FAULT);
+	hwr_recover(HWR_REASON_MMU_FAULT, mmu, req);
 }
 
 /*

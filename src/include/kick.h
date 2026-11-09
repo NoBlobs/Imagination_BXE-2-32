@@ -32,5 +32,6 @@ void bif_rebuild(void);
 
 /* hwr.c */
 enum { HWR_REASON_MMU_FAULT = 1, HWR_REASON_LOCKUP = 2 };
-void hwr_recover(uint32_t reason);
+void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status);
+uint64_t kick_bif_pc(uint32_t slot);
 void hwr_watchdog(void);

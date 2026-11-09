@@ -126,7 +126,11 @@ void gpu_units_init(void)
 	bcast_write32(CR_UNIT_RESET_PULSE, 0);
 
 	/* 5. PDS / USC execution bases */
+#ifdef EXP_NO_PDS_BASE
+	bcast_write64(CR_PDS_EXEC_BASE, 0);     /* E025: reproduce the E006 page fault */
+#else
 	bcast_write64(CR_PDS_EXEC_BASE, si->pds_exec_base);
+#endif
 	bcast_write64(CR_USC_EXEC_BASE0, si->usc_exec_base);
 	bcast_write64(CR_USC_EXEC_BASE1, si->usc_exec_base);
 	bcast_write64(CR_USC_EXEC_BASE2, si->usc_exec_base);

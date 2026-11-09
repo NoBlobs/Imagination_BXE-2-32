@@ -56,6 +56,7 @@ void pow_handle(const struct kccb_cmd *cmd)
 			sched_run();
 			pow_set_state(POW_STATE_FORCED_IDLE);
 		} else {
+			TRACE(SFID_POW_20, pow_flags);
 			g.forced_idle = false;
 			pow_flags &= ~PF_FORCED_IDLE;
 			pow_set_state(POW_STATE_IDLE);
@@ -67,6 +68,7 @@ void pow_handle(const struct kccb_cmd *cmd)
 		pow_flags |= PF_OFF_PENDING | (arg ? PF_FORCED_REQ : 0);
 		TRACE(SFID_POW_59, arg, pow_flags);
 		gpu_teardown();
+		stats_set_state(GPU_UTIL_STATE_IDLE);
 		pow_set_state(POW_STATE_OFF);
 		TRACE(SFID_POW_6, g.pow_state, POW_STATE_OFF, pow_flags);
 		g.powered_off = true;

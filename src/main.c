@@ -75,6 +75,7 @@ void fw_main(void)
 	memset(&g, 0, sizeof(g));
 	shared_init();
 	trace_init();
+	stats_init();
 	*boot_data_word(BD_BOOT_STAGE) = 5;
 	cr_write32(CR_DBG_STAGE, 0xC0DE0005);
 

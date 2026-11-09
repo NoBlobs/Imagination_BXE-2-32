@@ -35,6 +35,7 @@ The client CCB walk and the data-master kicks are in
 | `src/mmu.c` | ~45 | `KCCB_MMUCACHE`: BIF invalidation, PM TLB and the MIPS dynamic TLB. |
 | `src/sched.c` | ~420 | Context table, client CCB walk (fences, updates, tasks), retirement, cleanup, power state. |
 | `src/kick.c` | ~370 | BIF catalogue slots and their rebuild, the compute (CDM) kick, the TQ_3D kick, completion events, MMU fault report, SLC flush. |
+| `src/stats.c` | ~180 | GPU utilisation (`gpu_util_fwcb`) and time correlation, HWR log (`hwrinfobuf`), FWCCB context-reset notification. |
 | `src/hwr.c` | ~115 | Hardware recovery: MMU fault or watchdog (context `max_deadline_ms`) → SOFT_RESET pulse → GPU units re-init → discard the guilty commands. |
 | `src/util.c` | ~190 | memset and memcpy, 64-bit division, GPU timer, delays and polls, write barrier, host notification, trace writer. |
 | `src/include/fwif.h` | ~450 | Firmware interface structures, checked with `static_assert` against the offsets in the public `pvr_rogue_fwif_check.h`. |

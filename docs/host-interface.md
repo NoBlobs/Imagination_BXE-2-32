@@ -123,8 +123,8 @@ the wrapper before the host reads them.
 FWCCB is the firmware-to-host ring of 0x58-byte commands. `fwccb_send()` waits while
 the ring is full. It notifies the host and spins in 10 µs steps, emitting the trace
 `MAIN_90` once. It then copies the command, publishes `write_offset` and notifies.
-Nothing sends FWCCB commands yet. Freelist grow, context reset and the like will need
-them later.
+It currently sends `CONTEXT_RESET_NOTIFICATION` (section 6). Freelist grow and
+freelist reconstruction will be added with the geometry kick.
 
 ## 5. Power (`power.c`)
 
@@ -154,7 +154,52 @@ through new KICK commands. This cycle (`IDLE → FORCED_IDLE → OFF → domain 
 cold reset → firmware_started`) is verified on the board, see
 [E005](logRefs/E005-runtime-pm-cycle.md).
 
-## 6. Trace buffer (`util.c`)
+## 6. Statistics, HWR log and robustness (`stats.c`)
+
+Verified in [E025](logRefs/E025-stats-and-reset-notification.md).
+
+**Time correlation.** The mainline host writes no correlation entries. At every boot and
+on `CORECLKSPEEDCHANGE`, the firmware adds one to `gpu_util_fwcb.time_corr[]`:
+- `cr_timestamp` = `CR_TIMER`;
+- `os_timestamp` = ns derived from it;
+- `cr_delta_to_os_delta_kns = (256·10⁹ << 20) / core clock`;
+- then `time_corr_seq_count++`.
+
+**Utilisation.** The state is:
+- ACTIVE while a DM is busy or a context has pending work;
+- BLOCKED in that same situation under forced idle;
+- IDLE otherwise.
+
+Each change adds the elapsed ns to `stats_counters[old state]` and writes
+`last_word = time | state`. Going idle also sets `sysdata.start_idle_time`. The trace
+shows `POW_2` "GPU idle", `POW_22` "Cancel idle timer" and, in the debug group, `DBG_20`
+with the totals in µs.
+
+**HWR log.** Every command discarded by HWR gets a `rogue_hwrinfo` entry in
+`osinit.hwr_info_buf_ctl_fw_addr`:
+- BIF request and MMU status, page catalogue, PID;
+- `EVENT_STATUS`, DM, `hwr_type` (`BIF0FAULT` or `OVERRUN`);
+- kick and reset times.
+
+The first 8 entries are kept, and the last 8 form a ring. The per-DM counters are kept
+there too.
+
+**Context reset notification.** For each discarded command, FWCCB
+`CONTEXT_RESET_NOTIFICATION` (105) carries the context's `server_common_context_id`, the
+reason (`GUILTY_LOCKUP` for an MMU fault, `GUILTY_OVERRUNING` for the watchdog), the DM,
+the job ref (`ext_job_ref`), the page catalogue and, for a fault, the `PF` flag with the
+fault address. The mainline host prints it:
+
+```
+[drm] Received context reset notification on context 2
+[drm]   Reset reason=1 (Guilty lockup)  Data Master=4 (Compute)  Job ref=1
+[drm]   Page fault occurred, fault address=26c0
+```
+
+**HWPerf.** The host allocates no HWPerf buffer. The HWPerf KCCB commands are acknowledged
+and no packets are produced (`hwperf-trace.md`).
+
+## 7. Trace buffer (`util.c`)
 
 `sysinit.trace_buf_ctl_fw_addr` → `rogue_fwif_tracebuf`: `log_type` and, per thread,
 `trace_pointer` and `trace_buffer_fw_addr`. The size is

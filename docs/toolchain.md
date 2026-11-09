@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `2840e82c…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `7d597e9c…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -84,6 +84,9 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | `EXP_SLC_FLUSH_PER_KICK` | SLC flush and invalidate before every TQ kick (E020) |
 | `EXP_TIF=<n>` | force the TQ's tiles-in-flight value (E022) |
 | `EXP_SLC_ONLY_FLUSH` | completion flush = SLC only, instead of the per-DM sequence (E023 control) |
+| `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |
+| `EXP_NO_PDS_BASE` | leave the PDS exec base at 0, to reproduce the E006 page fault (E025) |
+| `EXP_TQ_FORCE_FAULT` | write the TQ's FAST_2D registers unconditionally (no longer faults, E025) |
 | `EXP_FRAG_CTRL=<v>` | value for `MULTICORE_FRAGMENT_CTRL_COMMON` in the TQ kick (default 1, E023) |
 
 The exec-base and event-enable knobs of E009–E012 were removed once the spec gave the

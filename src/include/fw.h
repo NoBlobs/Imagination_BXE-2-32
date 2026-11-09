@@ -136,6 +136,18 @@ void gpu_units_init(void);
 bool gpu_units_ready(void);
 bool dust_power(bool on);
 
+/* statistics, time correlation, HWR log, robustness (stats.c) */
+void stats_init(void);
+void stats_time_corr(void);
+uint64_t stats_now_ns(void);
+void stats_set_state(uint32_t state);
+void stats_hwr_log(uint32_t dm, uint32_t hwr_type, uint64_t req, uint64_t mmu,
+		   uint64_t pc, uint32_t event_status, uint64_t kick_time,
+		   uint64_t reset_start, uint64_t reset_finish, uint32_t pid);
+void stats_notify_context_reset(fwaddr_t ctxaddr, uint32_t dm, uint32_t reason,
+				uint32_t job_ref, uint64_t pc, bool page_fault,
+				uint64_t fault_addr);
+
 /* mmu */
 void mmu_cache_op(const struct kccb_cmd *cmd);
 void slc_flush_inval(void);
