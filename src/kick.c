@@ -204,7 +204,10 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifdef EXP_SLC_FLUSH_PER_KICK
 	slc_flush_inval();      /* E020: rule out stale SLC lines in the PDS/PBE data */
 #endif
-	bcast_write32(CR_FRAG_CTRL_COMMON, (1u << 8) | 1);   /* execute count 1, GPU 0 */
+#ifndef EXP_FRAG_CTRL
+#define EXP_FRAG_CTRL 1
+#endif
+	bcast_write32(CR_FRAG_CTRL_COMMON, EXP_FRAG_CTRL);  /* 1: single-core GPU (spec) */
 
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_FRAG);
 	bif_set_index(DM_FRAG, slot);
@@ -215,7 +218,6 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	 */
 	bool fast2d = (r->isp_render & 3) == 2;
 
-	bcast_write32(CR_ISP_RENDER, r->isp_render & ~0x10u);  /* early, as the original does */
 	bcast_write32(CR_ISP_BGOBJVALS, r->isp_bgobjvals);
 	bcast_write64(CR_PDS_BGRND0_BASE, r->pds_bgnd0_base);
 	bcast_write64(CR_PDS_BGRND1_BASE, r->pds_bgnd1_base);
@@ -277,12 +279,15 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	      hdr->ext_job_ref, hdr->int_job_ref);
 	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER);
 	dm_start(DM_FRAG, ctxaddr, cmd_off, EV_PIXELBE_END_RENDER, SFID_MAIN_4, slot);
-	(void)cr_read32(CR_CORE_REVISION);
-	isp = cr_read32(CR_ISP_RENDER);
-#ifndef EXP_NO_RESUME_BIT
-	bcast_write32(CR_ISP_RENDER, isp | 0x10);
-#endif
-	bcast_write32(CR_PIXEL_LAUNCH, 1);      /* the real launch: last write (Q8, E017) */
+	/*
+	 * Launch (answer to Q14): ISP_RENDER = isp_render, then 0x0F00 = 1.
+	 * ISP_RENDER |= 0x10 belongs to the context-resume path only, which is not
+	 * implemented (contexts are never stored).
+	 */
+	isp = r->isp_render & ~0x10u;
+	bcast_write32(CR_ISP_RENDER, isp);
+	bcast_write32(CR_PIXEL_LAUNCH, 1);      /* last write */
+	cr_write32(CR_MTS_SCHEDULE, 0);         /* request a BG pass, as the original does */
 	return true;
 }
 
@@ -321,6 +326,48 @@ static void mmu_fault(void)
 	hwr_recover(HWR_REASON_MMU_FAULT);
 }
 
+/*
+ * Per-job cache flush on completion, before the command is retired
+ * (kick-compute-and-3d.md, "Completion: per-job cache flush", answer to Q14).
+ * None of these registers has a public name except MCU_FENCE and the SLC.
+ */
+#define CR_FLUSH_FE     0x4000
+#define CR_FLUSH_USC    0x0688
+#define CR_FLUSH_PDS    0x0668
+#define CR_FLUSH_TPU    0x1608
+#define CR_FLUSH_1480   0x1480
+#define CR_FLUSH_1488   0x1488
+#define CR_MCU_FENCE    0x1740
+#define CR_FLUSH_1720   0x1720
+#define CR_FLUSH_1728   0x1728
+
+[[maybe_unused]] static void dm_cache_flush(uint32_t dm)
+{
+	bool frag = dm == DM_FRAG;
+
+	if (dm != DM_FRAG && dm != DM_CDM) {
+		slc_flush_inval();
+		return;
+	}
+	bcast_write32(CR_FLUSH_FE, 1);
+	bcast_write32(CR_FLUSH_USC, frag ? 2 : 4);
+	cr_poll32(CR_FLUSH_USC, frag ? 2 : 4, 0, 10000);
+	bcast_write32(CR_FLUSH_PDS, frag ? 3 : 9);
+	cr_poll32(CR_FLUSH_PDS, 1, 0, 10000);
+	bcast_write32(CR_FLUSH_TPU, frag ? 0x38001 : 0x10001);
+	cr_poll32(CR_FLUSH_TPU, 1, 0, 10000);
+	if (frag)
+		bcast_write32(CR_FLUSH_1480, 1);
+	bcast_write32(CR_FLUSH_1488, 1);
+	bcast_write64(CR_MCU_FENCE, frag ? 0x0000018000000000ull : 0x0000028000000000ull);
+	bcast_write32(CR_FLUSH_1720, frag ? 0x2B : 0x33);
+	cr_poll32(CR_FLUSH_1728, 1, 0, 10000);
+	if (frag)
+		write_barrier();
+	bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, frag ? 6 : 8);
+	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
+}
+
 void kick_events(uint32_t ev)
 {
 	cr_write32(CR_DBG_EVENTS_SEEN, cr_read32(CR_DBG_EVENTS_SEEN) | ev);
@@ -333,11 +380,11 @@ void kick_events(uint32_t ev)
 		if (!s->busy || !(ev & s->event_mask))
 			continue;
 		cr_write32(CR_EVENT_CLEAR, s->event_mask);
-#ifdef EXP_TQ_DELAY_US
-		if (d == DM_FRAG)
-			udelay(EXP_TQ_DELAY_US);   /* E022: is the end event early? */
+#ifdef EXP_SLC_ONLY_FLUSH
+		slc_flush_inval();      /* E023 control: the old SLC-only flush */
+#else
+		dm_cache_flush(d);
 #endif
-		slc_flush_inval();
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
 		TRACE(s->finish_sfid);
 		sched_dm_done(d);

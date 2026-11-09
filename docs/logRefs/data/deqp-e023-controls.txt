@@ -1,0 +1,16 @@
+66b3e04e701e935f38d2778560f0cd4fe4b59e630a82c1600e353d88052c0a73  /lib/firmware/updates/powervr/rogue_36.29.52.182_v1.fw
+[15437.454538] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+== dEQP-VK.api.fill_and_update_buffer.*
+  Passed:        72/110 (65.5%)
+  Failed:        0/110 (0.0%)
+== dEQP-VK.api.copy_and_blit.core.buffer_to_buffer.*
+  Passed:        7/8 (87.5%)
+  Failed:        1/8 (12.5%)
+66fe2d3fd6ce655d7d86a15673e737cc79518f92b180e184ad9cffc09cb770d7  /lib/firmware/updates/powervr/rogue_36.29.52.182_v1.fw
+[15460.682060] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+== dEQP-VK.api.fill_and_update_buffer.*
+  Passed:        72/110 (65.5%)
+  Failed:        0/110 (0.0%)
+== dEQP-VK.api.copy_and_blit.core.buffer_to_buffer.*
+  Passed:        8/8 (100.0%)
+  Failed:        0/8 (0.0%)

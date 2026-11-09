@@ -54,11 +54,25 @@ The firmware reaches registers in three ways:
 | Offset | Src | Use |
 |---|---|---|
 | `0x0F00` | S | pixel-pipe launch: `BCAST = 1`, the last write of a 3D/TQ kick ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md)) |
-| `0x0F08` `ISP_RENDER` | P, S | `regs.isp_render`, then RMW `\| 0x10` before the launch |
-| `0xF310` `MULTICORE_FRAGMENT_CTRL_COMMON` | P | `0x101` (execute count 1, GPU 0) |
+| `0x0F08` `ISP_RENDER` | P, S | `regs.isp_render`, written right before the launch (E023); `\| 0x10` only when resuming |
+| `0xF310` `MULTICORE_FRAGMENT_CTRL_COMMON` | P | `1` (single-core GPU) |
 | `0x1510 + 8n` / `0x1550 + 8n` | S, E | PBE `WORD0`/`WORD1` of MRT n (planar reading) |
 | `0x0100`/`0x0104` `SOFT_RESET` | P, S | HWR pulse `0x13FFFC1D`/`0xFFEFFE00` → 0 ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
 | `0x0338` `PM_PARTIAL_RENDER_ENABLE` | P | 0 during HWR |
+
+## Completion flush registers (spec, answer to Q14)
+
+| Offset | Src | Fragment/transfer | Compute |
+|---|---|---|---|
+| `0x4000` | S | `1` | `1` |
+| `0x0688` | S | `2`, poll | `4`, poll |
+| `0x0668` | S | `3`, poll bit 0 | `9`, poll bit 0 |
+| `0x1608` | S | `0x38001`, poll bit 0 | `0x10001`, poll bit 0 |
+| `0x1480` / `0x1488` | S | `1` / `1` | — / `1` |
+| `0x1740` `MCU_FENCE` | P | `0x180_00000000` (DM_PIXEL) | `0x280_00000000` (DM_COMPUTE) |
+| `0x1720` / `0x1728` | S | `0x2B`, poll `0x1728` bit 0 | `0x33`, poll |
+| `0x3818` `SLC_CTRL_FLUSH_INVAL` | P | `6` (DM_TA \| DM_PIXEL) | `8` (DM_COMPUTE) |
+| `0x0388` | S | `0` in every TQ kick (role unknown) | |
 
 ## GPU bring-up registers (spec, `boot-gpu-init.md`)
 

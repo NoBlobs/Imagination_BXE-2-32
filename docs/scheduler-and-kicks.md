@@ -158,10 +158,10 @@ GPU, so the host leaves them unused (`docsClean/kick-compute-and-3d.md`, answer 
 offsets are relative to the cCCB header, so `cmd+0x30` = `regs+0`. The full field map is
 in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
 
-1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101` and bind the BIF slot for DM 3
-   (`CAT_BASE_INDEX` bits 10:8). The binding is mandatory before any ISP or PBE write.
+1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 1` (single core) and bind the BIF slot
+   for DM 3 (`CAT_BASE_INDEX` bits 10:8). The binding is mandatory before any ISP or PBE
+   write.
 2. Program the transfer, ISP and PBE registers with the table from the Q13 answer:
-   - `ISP_RENDER = isp_render` first.
    - Only in FAST_2D (`(isp_render & 3) == 2`): `0x0F20` (`isp_mtile_base`), `0x0F28`
      (`isp_rgn`), `0x0FC8/0x0FCC = 0/0xE4`. Writing them outside that condition made the
      PBE write to address 0 ([E022](logRefs/E022-tq3d-completes-first-tile-lost.md)).
@@ -172,13 +172,34 @@ in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
      `pbe_wordx_mrty[2n]`, `[2n+1]`.
    - `event_pixel_pds_info/code/data → 0x0628/0x0618/0x0620`: the end-of-tile program,
      whose data holds the PBE destination address.
-3. Launch: RMW `ISP_RENDER | 0x10`, then **`BCAST[0x0F00] = 1`**, the real launch and the
-   last write.
+3. Launch: **`ISP_RENDER = isp_render`, then `BCAST[0x0F00] = 1`**, the last two writes.
+   Then `MTS_SCHEDULE = 0`, which requests a BG pass. Writing `ISP_RENDER` before the
+   configuration lost the first tile of multi-tile transfers. `ISP_RENDER |= 0x10` belongs
+   to the context-resume path only, which is not implemented
+   ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)).
 4. Completion: `PIXELBE_END_RENDER`; finish trace `MAIN_4` "3D Transfer finished".
 
-State ([E022](logRefs/E022-tq3d-completes-first-tile-lost.md)): TQ jobs complete without
-faults, and single-tile transfers are correct. In multi-tile transfers the first tile is
-not written, and not on every run (Q14).
+State ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)): correct.
+`fill_and_update_buffer` passes 72/72 and `buffer_to_buffer` 8/8.
+
+## Completion: per-DM cache flush
+
+`kick_events()` → `dm_cache_flush(dm)` runs before `sched_dm_done()` retires the command.
+It follows `kick-compute-and-3d.md`, "Completion: per-job cache flush":
+
+| Step | Fragment / transfer | Compute |
+|---|---|---|
+| 1 | `0x4000 = 1` | `0x4000 = 1` |
+| 2 | `0x0688 = 2`, poll | `0x0688 = 4`, poll |
+| 3 | `0x0668 = 3`, poll bit 0 | `0x0668 = 9`, poll bit 0 |
+| 4 | `0x1608 = 0x38001`, poll bit 0 | `0x1608 = 0x10001`, poll bit 0 |
+| 5 | `0x1480 = 1`, `0x1488 = 1` | `0x1488 = 1` |
+| 6 | `MCU_FENCE = 0x180_00000000` | `MCU_FENCE = 0x280_00000000` |
+| 7 | `0x1720 = 0x2B`, poll `0x1728` | `0x1720 = 0x33`, poll `0x1728` |
+| 8 | write barrier | — |
+| 9 | `SLC_CTRL_FLUSH_INVAL = 6`, poll `SLC_STATUS0` bit 2 | `SLC_CTRL_FLUSH_INVAL = 8`, poll |
+
+Other DMs keep the full SLC flush (`ALL`).
 
 ## MMU faults and hardware recovery (`hwr.c`)
 

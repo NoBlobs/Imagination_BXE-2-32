@@ -20,9 +20,9 @@ this BVNC as experimental.
 | Vulkan device enumeration (`vulkaninfo`) | works: `PowerVR B-Series BXE-2-32 MC1` |
 | Client CCB scheduling, fences and updates | implemented |
 | GPU bring-up (exec bases, unit init, dust power) | works |
-| Compute jobs | **work**: `compute.pipeline.basic` 64–67/82 (failures come from transfers, 9 not supported), `indirect_dispatch` 24/24 and `builtin_var` 11/11 of the supported cases |
+| Compute jobs | **work**: every supported case of `compute.pipeline.basic` (73), `indirect_dispatch` (24) and `builtin_var` (11) passes |
 | Hardware recovery (HWR) | works: a faulting or hung job is reset and discarded in ~0.3 ms |
-| Transfer (TQ_3D) | jobs complete and single-tile transfers are correct; multi-tile transfers still lose their first tile |
+| Transfer (TQ_3D) | **works**: `api.fill_and_update_buffer` 72/72 and `api.copy_and_blit.core.buffer_to_buffer` 8/8 of the supported cases |
 | Geometry and fragment kicks | not implemented |
 
 See [docs/status.md](docs/status.md) for details and the next steps.

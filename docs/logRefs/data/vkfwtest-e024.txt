@@ -1,0 +1,59 @@
+===== pre-cdm
+WARNING: powervr is not a conformant Vulkan implementation, testing use only.
+[low] device created, global priority 128
+[high] HIGH priority not permitted, using MEDIUM
+[high] device created, global priority 256
+calibrate CDM: n=4 -> 0.040 s
+calibrate CDM: n=16 -> 0.059 s
+calibrate CDM: n=64 -> 0.137 s
+calibrate CDM: n=256 -> 0.462 s
+CDM: high-priority probe alone: 1.79 ms
+CDM: low job n=831 ran 2.476 s; 10 high probes during it: avg 141.59 ms, worst 1399.02 ms
+CDM: probes  finished inside the low job (preemption or concurrent execution)
+done
+exit 0
+===== xfer
+[xfer] device created, global priority 0
+xfer: iteration 0 (queue 0, msaa resolve 1) 75.72 ms
+xfer: iteration 1 (queue 1, msaa resolve 1) 74.42 ms
+xfer: iteration 2 (queue 0, msaa resolve 1) 74.22 ms
+xfer: iteration 3 (queue 1, msaa resolve 1) 73.29 ms
+xfer: iteration 4 (queue 0, msaa resolve 1) 74.26 ms
+xfer: iteration 5 (queue 1, msaa resolve 1) 73.38 ms
+xfer: iteration 6 (queue 0, msaa resolve 1) 73.90 ms
+xfer: iteration 7 (queue 1, msaa resolve 1) 73.71 ms
+xfer: iteration 8 (queue 0, msaa resolve 1) 74.06 ms
+xfer: iteration 9 (queue 1, msaa resolve 1) 73.36 ms
+done
+exit 0
+===== sparse
+MESA: warning: ../src/imagination/vulkan/winsys/powervr/pvr_drm.c:344: FINISHME: Core count fetching is unimplemented. Setting 1 for now.
+WARNING: powervr is not a conformant Vulkan implementation, testing use only.
+[sparse] sparse binding not supported
+exit 0
+  0.00s 1a68=00000000
+===== pre-3d
+calibrate 3D: n=268435456 -> 0.002 s
+calibrate 3D: n=1073741824 -> 0.002 s
+3D: high-priority probe alone: 1.93 ms
+3D: low job n=4294967295 ran 1.092 s; 10 high probes during it: avg 1.94 ms, worst 2.06 ms
+3D: probes  finished inside the low job (preemption or concurrent execution)
+done
+exit 0
+===== pre-ta
+calibrate TA: n=268435456 -> 0.002 s
+calibrate TA: n=1073741824 -> 0.002 s
+TA: high-priority probe alone: 1.91 ms
+TA: low job n=4294967295 ran 1.092 s; 10 high probes during it: avg 1.96 ms, worst 2.11 ms
+TA: probes  finished inside the low job (preemption or concurrent execution)
+done
+exit 0
+===== bigpb
+bigpb: frame 3: 4194304 triangles in 0.002 s
+bigpb: frame 4: 8388608 triangles in 0.002 s
+bigpb: frame 5: 8388608 triangles in 0.002 s
+bigpb: frame 6: 2097152 triangles in 0.002 s
+bigpb: frame 7: 524288 triangles in 0.002 s
+done
+exit 0
+111

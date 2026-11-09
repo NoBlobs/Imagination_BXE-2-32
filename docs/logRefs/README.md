@@ -41,5 +41,7 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E020](E020-tq3d-pbe-two-banks.md) | 2026-11-08 | TQ_3D with the corrected Q12 table | PBE in two banks, tiles-in-flight, conditional mtile base: the write to address 0 remains; host PBE words carry no address (Q13) |
 | [E021](E021-watchdog-deadline-wider-compute.md) | 2026-11-08 | Watchdog and wider compute groups | 2 s killed a long job; now uses the context's `max_deadline_ms`; indirect_dispatch 24/24, builtin_var 11/11 |
 | [E022](E022-tq3d-completes-first-tile-lost.md) | 2026-11-09 | TQ_3D with the full Q13 table | **TQ jobs complete, no fault** (conditional registers were the cause); multi-tile transfers lose their first tile, non-deterministically (Q14) |
+| [E023](E023-tq-launch-order-and-dm-flush.md) | 2026-11-09 | TQ launch order + per-DM completion flush | **no failures**: compute basic 73/73, indirect 24/24, builtin_var 11/11, fill_and_update 72/72, buffer_to_buffer 8/8; `ISP_RENDER` must be the write right before `0x0F00` |
+| [E024](E024-vkfwtest.md) | 2026-11-09 | `vkfwtest` workloads | compute and transfer scenarios run cleanly; graphics scenarios finish but draw nothing (3D/TA kicks missing); no preemption |
 
 The raw data is in [data/](data/).
