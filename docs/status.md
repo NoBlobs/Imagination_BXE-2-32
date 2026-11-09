@@ -31,7 +31,8 @@ Mesa `pvr`.
 
 | Item | State |
 |---|---|
-| Geometry / fragment / TDM kicks | not implemented; retired at once |
+| Geometry kick | experimental (`-DEXP_TA`): the pipe starts, but the PM hands out no pages ([E028](logRefs/E028-ta-kick-bringup.md)); by default geometry is retired at once |
+| Fragment (3D) kick | not implemented (needs the TA output); retired at once |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
@@ -62,14 +63,15 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E027 | host render structures matched by value to the observed geometry registers |
+| E028 | first TA kick: `0x0CB0` = TA context-state base (canary method); the geometry pipe starts, but the PM hands out no pages |
 | E026 | `SLCFLUSHINVAL` flushes the SLC; `copy_and_blit` mostly passes (the failures are draws, or offset/NPOT/mirror cases unaffected by extra flushes); stability run to be repeated |
 | E025 | statistics and the HWR log are published; reset notifications reach the host log (`fault address=26c0`); the mainline host only logs them |
 
 ## Next steps
 
-1. Repeat the stability run (`tools/stab-run.sh`) once the board is back on the SD system
-   ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)).
-2. Look closer at `buffer_to_buffer_with_offset` (all 64 fail, off by one).
-3. Answers to Q15–Q26 ([questions.md](questions.md)), then the 3D and TA kicks, SPM and
-   `dEQP-VK.draw.*`.
-4. Preemption (context store/resume).
+1. Answers to Q16b–Q16d (PM free-list registers, unmatched geometry registers, context
+   state) and the rest of Q19–Q21/Q23/Q24. Then finish the TA kick (`-DEXP_TA`), write
+   the 3D kick, and run `dEQP-VK.draw.*`.
+2. Repeat the stability run (`tools/stab-run.sh`).
+3. Look closer at `buffer_to_buffer_with_offset` (host side, per the Q25 answer).

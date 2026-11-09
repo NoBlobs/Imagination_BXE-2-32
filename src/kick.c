@@ -36,7 +36,7 @@ static bool bif_slot_in_use(uint32_t slot)
 }
 
 /* Bind a memory context to a BIF catalogue slot (1..7); returns the slot. */
-static uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm)
+uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm)
 {
 	struct fwmemcontext *mc = fwptr(memctx_addr);
 	uint64_t pc = mc ? (mc->pc_dev_paddr & 0xFFFFFFF000ull) : 0;
@@ -75,7 +75,7 @@ static uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm)
 	return slot;
 }
 
-static void bif_set_index(uint32_t dm, uint32_t slot)
+void bif_set_index(uint32_t dm, uint32_t slot)
 {
 	uint32_t lo = cr_read32(CR_BIF_CAT_BASE_INDEX);
 	uint32_t shift;
@@ -118,7 +118,7 @@ void slc_flush_inval(void)
 	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
 }
 
-static void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
+void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 		     uint32_t finish_sfid, uint32_t slot)
 {
 	struct dm_state *s = &dms[dm];
@@ -304,6 +304,50 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	return true;
 }
 
+/*
+ * E027: dump the host structures behind a geometry / fragment command to the
+ * debug trace (group DBG, mask 0x80007FFE), so they can be matched by value
+ * against the registers the spec observed.  Each block starts with a DBG_2
+ * tag (0xD0000000 | block id | byte offset) followed by DBG_9 lines of 8 words.
+ */
+static void dump_words(uint32_t tag, const void *base, uint32_t bytes)
+{
+	const uint32_t *w = base;
+
+	if (!w)
+		return;
+	for (uint32_t off = 0; off < bytes; off += 32) {
+		const uint32_t *p = w + off / 4;
+
+		TRACE(SFID_DBG_2, tag | off);
+		TRACE(SFID_DBG_9, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+	}
+}
+
+[[maybe_unused]] static void dump_render_cmd(uint32_t id, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
+			    const void *payload, uint32_t size)
+{
+	/* rogue_fwif_cmd_geom_frag_shared: frame, hwrt_data_fw_addr, pr_buffer[2] */
+	const uint32_t *shared = payload;
+	const uint8_t *hwrt = fwptr(shared[1]);
+
+	dump_words(0xD0000000u | (id == CCB_CMD_GEOM ? 0x10000 : 0x20000), payload, size);
+	if (hwrt) {
+		dump_words(0xD0030000u, hwrt, 288);                       /* rogue_fwif_hwrtdata */
+		dump_words(0xD0040000u, fwptr(*(const uint32_t *)(hwrt + 164)), 88); /* common */
+		for (uint32_t i = 0; i < 3; i++) {
+			const void *fl = fwptr(*(const uint32_t *)(hwrt + 176 + 4 * i));
+
+			dump_words(0xD0050000u + (i << 12), fl, 64);              /* freelists */
+		}
+	}
+	/* fwrendercontext: geom ctx @0, frag ctx @152, static state @304 (2 x 184) */
+	if (id == CCB_CMD_GEOM) {
+		dump_words(0xD0060000u, (const uint8_t *)fwptr(ctxaddr) + 304, 184);
+		dump_words(0xD0070000u, fwptr(ctx->context_state_addr), 64);
+	}
+}
+
 bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
 {
@@ -319,6 +363,19 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	case CCB_CMD_PRE_TIMESTAMP:
 	case CCB_CMD_FBSC_INVALIDATE:
 		return false;
+#ifdef EXP_TA
+	case CCB_CMD_GEOM:
+		/* experimental: runs, but the PM hands out no pages yet (E028) */
+		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
+		return kick_geom(ctxaddr, ctx, hdr, payload, cmd_off);
+#endif
+#ifdef EXP_DUMP_RENDER
+	case CCB_CMD_GEOM:
+	case CCB_CMD_FRAG:
+	case CCB_CMD_FRAG_PR:
+		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
+		[[fallthrough]];
+#endif
 	default:
 		/* Not implemented yet: complete without running, never hang the host. */
 		TRACE(SFID_MAIN_172, ctxaddr, ctx->ccbctl_fw_addr, ctx->ccb_fw_addr, cmd_off,
@@ -358,6 +415,17 @@ static void dm_cache_flush(uint32_t dm)
 {
 	bool frag = dm == DM_FRAG;
 
+	if (dm == DM_GEOM) {
+		/* geometry variant: only partly specified (Q19): 0x0688 = 1, 0x0668 = 5, SLC DM_TA */
+		bcast_write32(CR_FLUSH_FE, 1);
+		bcast_write32(CR_FLUSH_USC, 1);
+		cr_poll32(CR_FLUSH_USC, 1, 0, 10000);
+		bcast_write32(CR_FLUSH_PDS, 5);
+		cr_poll32(CR_FLUSH_PDS, 1, 0, 10000);
+		bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, 2);
+		cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
+		return;
+	}
 	if (dm != DM_FRAG && dm != DM_CDM) {
 		slc_flush_inval();
 		return;
@@ -399,6 +467,8 @@ void kick_events(uint32_t ev)
 		dm_cache_flush(d);
 #endif
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
+		if (d == DM_GEOM)
+			geom_done(s);
 		TRACE(s->finish_sfid);
 		sched_dm_done(d);
 	}

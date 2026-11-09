@@ -35,3 +35,14 @@ enum { HWR_REASON_MMU_FAULT = 1, HWR_REASON_LOCKUP = 2 };
 void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status);
 uint64_t kick_bif_pc(uint32_t slot);
 void hwr_watchdog(void);
+
+/* shared kick helpers (kick.c) */
+uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm);
+void bif_set_index(uint32_t dm, uint32_t slot);
+void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
+	      uint32_t finish_sfid, uint32_t slot);
+
+/* geometry (geom.c) */
+bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
+	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off);
+void geom_done(struct dm_state *s);

@@ -60,6 +60,34 @@ The firmware reaches registers in three ways:
 | `0x0100`/`0x0104` `SOFT_RESET` | P, S | HWR pulse `0x13FFFC1D`/`0xFFEFFE00` → 0 ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
 | `0x0338` `PM_PARTIAL_RENDER_ENABLE` | P | 0 during HWR |
 
+## Geometry registers (spec observation + E027/E028)
+
+| Offset | Src | Value | Confidence |
+|---|---|---|---|
+| `0x0400` | S | `1`: TA/VDM trigger (last write) | spec |
+| `0x0408` | S, O | `vdm_ctrl_stream_base` | spec observation |
+| `0x0410` | E | VDM current pointer (read); reached `base + 0x40` in E028 | observed |
+| `0x0418` | O, E | `VDM_CALL_STACK_POINTER` ← geometry context state `+8` (call stack init) | value match |
+| `0x0428` | E | candidate `VDM_CONTEXT_STATE_BASE` | guess (E008 mask) |
+| `0x0210` / `0x0218` | S, O | local free list address (one per PM context) | spec observation |
+| `0x0220` / `0x0224` | O, E | low 22 bits: total pages (guess); high: free-list stack top | partly confirmed |
+| `0x0248` | O | `PM_VHEAP_TABLE` ← `vheap_table_dev_addr` | spec observation |
+| `0x0250` / `0x0258` | S | PM handshakes | spec |
+| `0x0270`/`0x0278`/`0x0280`, `0x02C0`/`0x02C8`/`0x02D0` | O, E | ALIST / MLIST stack pointers (`0x0278`/`0x02C8` writable) | partly |
+| `0x0C08` / `0x0C10` | O, E | `TE_MTILE1/2` ← `te_mtile1/2` | value + mask + Mesa |
+| `0x0C18` | O, E | `TE_SCREEN` ← `te_screen` | value + mask + Mesa |
+| `0x0C20` | O, E | ← `mtile_stride` | value + mask |
+| `0x0C28` | O | `TE_PSG` ← `te_psg` | spec observation + mask |
+| `0x0C38` / `0x0C40` | O | `TE_PSGREGION_ADDR` ← `rgn_header_dev_addr`; `TE_TPC_ADDR` ← `tail_ptrs_dev_addr` | spec observation |
+| `0x0C68` | S | `1`, poll bit 0 = 1 (context enable) | spec + E028 |
+| `0x0C78` / `0x0C80` | O, E | ← `multi_sample_ctl` / `flipped_multi_sample_ctl` | value |
+| `0x0C88` | O | `PPP_CTRL` ← `ppp_ctrl` | spec observation |
+| `0x0C98` | O, E | `PPP_SCREEN` ← `screen_pixel_max` | value + mask + Mesa |
+| `0x0CB0` | **E** | TA context-state base ← `geom_reg_ta_context_state_base_addr`; read at `+0x200` on context enable | **canary experiment (E028)** |
+| `0x0CE0` | O | `1` for a new kick | spec observation |
+| `0x17A0` | O | `tpu_border_colour_table` (geometry and 3D) | spec observation |
+| `0x6020` | P | `PERF_TA_CYCLE`: counts while the TA runs | public |
+
 ## Completion flush registers (spec, answer to Q14)
 
 | Offset | Src | Fragment/transfer | Compute |

@@ -18,7 +18,7 @@ CFLAGS  := $(TARGET) -std=c23 -O2 -g -ffreestanding -fno-builtin -fno-pic -mno-a
            -Wno-unused-parameter -Iinclude $(EXP)
 ASFLAGS := $(TARGET) -fno-pic -mno-abicalls -G0 -Iinclude -D__ASSEMBLER__
 
-SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c gpu_init.c hwr.c stats.c
+SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c gpu_init.c hwr.c stats.c geom.c
 SRCS_S  := boot.S vectors.S
 OBJS    := $(addprefix $(BUILD)/obj/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 

@@ -45,5 +45,7 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E024](E024-vkfwtest.md) | 2026-11-09 | `vkfwtest` workloads | compute and transfer scenarios run cleanly; graphics scenarios finish but draw nothing (3D/TA kicks missing); no preemption |
 | [E025](E025-stats-and-reset-notification.md) | 2026-11-09 | Statistics, HWR log, reset notification | utilisation and time correlation published; overrun and page-fault notifications decoded by the host (`fault address=26c0`) |
 | [E026](E026-slcflush-copy-and-blit-stability.md) | 2026-11-09 | `SLCFLUSHINVAL`, `copy_and_blit`, stability | real SLC flush (not sent by mainline); copy_and_blit mostly passes, deterministic offset/NPOT/mirror failures not caused by caches; stability run interrupted by an external reboot |
+| [E027](E027-render-structures-by-value.md) | 2026-11-09 | Host render structures vs. observed registers | `0x0C98`/`0x0C18`/`0x0C08`/`0x0C10`/`0x0C20`/`0x0C78`/`0x0C80`/`0x0418` mapped to `hwrtdata_common` and context-state fields |
+| [E028](E028-ta-kick-bringup.md) | 2026-11-09 | First TA kick | canary method finds `0x0CB0` = TA context-state base; geometry runs and fetches its first 64 B, but the PM hands out no pages |
 
 The raw data is in [data/](data/).

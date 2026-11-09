@@ -22,6 +22,55 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 
 ### A. Geometry (TA) kick — blocks all rendering
 
+> **2026-11-09, after the partial answer.** Q15, Q22 (fence), Q25 and Q26 are answered
+> (see the "Answered" table). Q16–Q21 are partly answered by the spec's observation. E027
+> and E028 filled in part of the rest by experiment, and the follow-up questions are
+> **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
+> `frag_regs`), Q23 and Q24 are still fully open.
+
+#### Q16b — PM free-list registers (blocking: the TA runs but gets no pages)
+
+With the TA kick of [E028](logRefs/E028-ta-kick-bringup.md), geometry starts: the TA
+cycle counter runs and the VDM fetches its first 64 bytes. The PM then hands out no page:
+the stack top stays `0x1F`, and ALIST/MLIST stay 0. Programmed so far for PM context 0:
+- `0x0248` = VHeap;
+- `0x0210` = local free list address;
+- `0x0220` = `current_pages` (low 22 bits) | stack top (`0x0224`);
+- `PM_CAT_BASE_{VCE,TE,ALIST}0` = HWRTData cat bases (0 on a first kick);
+- `0x0278`/`0x02C8` = ALIST/MLIST SP;
+- `0x02D8` = `pm_mlist_dev_addr` (guess);
+- handshakes `0x0250`/`0x0258`.
+
+Questions:
+- Which registers receive each value the public "Load Freelist" trace prints, for the
+  local and the global free list and for each PM context: TotalPMPages, FL-addr, stacktop,
+  Alloc Page Count, Alloc MMU Page Count? The E008 masks show 22-bit fields at
+  `0x0220` (low/high), `0x02B8` and `0x02C8`, 33-bit fields at `0x0268`/`0x0278`, a 16-bit
+  field at `0x0298`, and 40/44-bit addresses at `0x0218`, `0x0230`, `0x0240`, `0x02D8` and
+  `0x02E0`.
+- Is the low field of `0x0220` the total page count?
+- Which register is `PM_MLIST0_BASE`, and is `pm_mlist_dev_addr` loaded on a first kick?
+- On a first kick the host leaves the HWRTData's `vce/te/alist_cat_base` at 0. Does the
+  firmware write anything to `PM_CAT_BASE_*0`, or does the PM fill them itself?
+- Is any other PM enable needed: `PM_PARTIAL_RENDER_ENABLE`, a PM "context select" or
+  "start", the macrotile array (`PM_MTILE_ARRAY`)?
+
+#### Q16c — geometry registers still unmatched
+
+After a working geometry job the spec saw `0x0C30/0x0C34 = 2/3`, `0x0C48 = 8`,
+`0x0C70 = 3`, `0x0C90` (64-bit) = `0x3089705F`, `0x0CA0 = 0x10`, `0x0CE0 = 1` and
+`0x0D00 = 0x3F`. Which of these are written by the firmware, and with what (constants,
+command fields, `hwrtdata_common` fields)? E027 matched the others by value (`0x0C98`,
+`0x0C18`, `0x0C08`, `0x0C10`, `0x0C20`, `0x0C78`, `0x0C80`, `0x0418`). Please confirm those.
+
+#### Q16d — context-state registers
+
+[E028](logRefs/E028-ta-kick-bringup.md) found by experiment that the hardware reads
+`[0x0CB0] + 0x200` when the geometry context is enabled, and that
+`0x0CB0 = geom_reg_ta_context_state_base_addr` removes the fault. Please confirm, and give:
+- the register for `geom_reg_vdm_context_state_base_addr` (`0x0428` is a candidate);
+- the meaning of `0x0CE0`, `0x0CB8`, `0x0C48` and `0x0D20` for a new kick.
+
 #### Q15 — What is a "register set"?
 
 `kick-geometry-ta.md` writes `CR[set+0xC00…0xC98]`, `CR[set+0xCB0…0xCE0]`,
@@ -231,5 +280,9 @@ The mainline host may not send them today, but a complete firmware should handle
 | Q12 TQ address 0 | PBE two banks, `0x0FD8`, conditional `0x0F20`. **Implemented**, but the fault remains: see Q13. | `docsClean/kick-compute-and-3d.md`; [E020](logRefs/E020-tq3d-pbe-two-banks.md) |
 | Q13 TQ destination | the destination is in the end-of-tile program data; complete table with conditions. **Implemented**: no more address-0 fault, TQs complete. See Q14. | `docsClean/kick-compute-and-3d.md`; [E022](logRefs/E022-tq3d-completes-first-tile-lost.md) |
 | Q14 first tile lost | launch = `ISP_RENDER = isp_render` then `0x0F00`, with `\|= 0x10` only on resume; per-DM cache flush before retiring. **Implemented: no failures in five groups.** | `docsClean/kick-compute-and-3d.md`; [E023](logRefs/E023-tq-launch-order-and-dm-flush.md) |
+| Q15 register set | no per-set addressing: fixed offsets in the geometry core's bank. Trace "register set N" = `CAT_BASE{N+1}`. **Used in E028.** | `docsClean/kick-geometry-ta.md` |
+| Q22 geometry → fragment | a `FENCE_PR` in the fragment cCCB on the geometry timeline UFO, both started by `COMBINED_GEOM_FRAG_KICK`. The extra HWRTData-state hold is still `TO CONFIRM`. | `docsClean/client-ccb.md` |
+| Q25 transfer fields | the Q13 table is the whole kick; the remaining failures are host-side | `docsClean/kick-compute-and-3d.md` |
+| Q26 KCCB no-ops | the mainline host never sends them; consuming them with `CMD_EXECUTED` is enough | `docsClean/kernel-ccb.md` |
 | Q11 HWR reset | SLC idle → partial renders off → SOFT_RESET pulse `0x13FFFC1D/0xFFEFFE00` → units re-init and BIF rebuild → discard → resume. **Implemented and working** (~0.28 ms). | `docsClean/hardware-recovery.md`; [E019](logRefs/E019-hwr-and-compute-basic-67.md) |
 | Q7 GPU units init, exec bases | PDS `0x0610` (found by experiment, [E009](logRefs/E009-pds-exec-base-0x0610.md)), USC `0x4008/0x4010/0x4028`; the full section-A sequence. `0x0FC8` (E012) is an ISP register. **Implemented: compute works.** | `docsClean/boot-gpu-init.md` A; [E013](logRefs/E013-gpu-units-init-compute-pass.md) |
