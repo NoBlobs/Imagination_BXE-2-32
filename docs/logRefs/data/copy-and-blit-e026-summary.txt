@@ -1,0 +1,24 @@
+buffer_to_buffer_with_offset pass=0/64 fail=64 ns=0
+buffer_to_image pass=88/115 fail=0 ns=27
+buffer_to_image_general_layout pass=88/115 fail=0 ns=27
+image_to_buffer pass=126/754 fail=10 ns=618
+image_to_buffer_general_layout pass=122/750 fail=10 ns=618
+image_to_buffer_indirect pass=0/262 fail=0 ns=262
+buffer_to_depthstencil pass=32/44 fail=0 ns=12
+depthstencil_to_buffer pass=32/44 fail=0 ns=12
+memory_to_image_indirect pass=0/85 fail=0 ns=85
+memory_to_depthstencil_indirect pass=0/44 fail=0 ns=44
+resolve_image pass=0/240 fail=38 ns=202
+depth_stencil_msaa_copy pass=48/432 fail=0 ns=384
+image_to_image_general_layout pass=19/23 fail=4 ns=0
+image_to_image.simple_tests pass=19/23 fail=4 ns=0
+image_to_image.3d_images pass=6/6 fail=0 ns=0
+image_to_image.array pass=9/9 fail=0 ns=0
+image_to_image.cube pass=6/6 fail=0 ns=0
+blit_image.simple_tests pass=74/411 fail=42 ns=295
+use_after_copy pass=0/2292 fail=182 ns=2110
+DONE
+[18400.513507] mmc1: sdhci: Timeout:   0x0000000e | Int stat: 0x00000002
+[18400.528508] mmc1: sdhci: Timeout:   0x0000000e | Int stat: 0x00000001
+
+[exited with code 0]

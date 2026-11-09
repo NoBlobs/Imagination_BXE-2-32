@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `7d597e9c…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `0b51fd6f…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -82,6 +82,7 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 |---|---|
 | `EXP_NO_EVENT_POLL` | the timer no longer polls `EVENT_STATUS`, so completions come from the MTS tasks only (E018) |
 | `EXP_SLC_FLUSH_PER_KICK` | SLC flush and invalidate before every TQ kick (E020) |
+| `EXP_DM_FLUSH_PER_KICK` | run the full DM 3 cache flush before every TQ kick as well (E026) |
 | `EXP_TIF=<n>` | force the TQ's tiles-in-flight value (E022) |
 | `EXP_SLC_ONLY_FLUSH` | completion flush = SLC only, instead of the per-DM sequence (E023 control) |
 | `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |

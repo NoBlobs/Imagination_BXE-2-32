@@ -100,7 +100,8 @@ magic value `0x2ABCxxxx` in their type are traced as `MAIN_150` and still acknow
 | `CORECLKSPEEDCHANGE` (204) | reloads the clock from `runtime_cfg`, trace `MAIN_93` |
 | `STATEFLAGS_CTRL` (209) | set, OR or clear `config_flags`, mirrored to `sysdata` |
 | `LOGTYPE_UPDATE` (206) | nothing to do: `log_type` is read live from the trace control |
-| `HEALTH_CHECK`, `SLCFLUSHINVAL`, `BP`, freelist/ZS-buffer updates, `REGCONFIG`, HWPerf, PDVFS, `PHR_CFG`, `WDG_CFG`, … | acknowledged, no action yet |
+| `SLCFLUSHINVAL` (105) | flush and invalidate the whole SLC, a superset of the requested range (E026); not sent by the mainline host |
+| `HEALTH_CHECK`, `BP`, freelist/ZS-buffer updates, `REGCONFIG`, HWPerf, PDVFS, `PHR_CFG`, `WDG_CFG`, … | acknowledged, no action yet |
 
 ### Host notification
 

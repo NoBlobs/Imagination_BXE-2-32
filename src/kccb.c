@@ -47,6 +47,19 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 		sched_force_update(cmd->data.force_update.context_fw_addr,
 				   cmd->data.force_update.ccb_fence_offset);
 		break;
+	case KCCB_SLCFLUSHINVAL: {
+		/*
+		 * The SLC flush/invalidate control works on the whole cache
+		 * (SLC_CTRL_FLUSH_INVAL.ALL = flush + invalidate), a superset of any
+		 * address range or DM context the host names.  The mainline host does
+		 * not send this command today.
+		 */
+		const typeof(cmd->data.slcflush) *f = &cmd->data.slcflush;
+
+		TRACE(SFID_DBG_5, f->context_fw_addr, f->inval, f->dm_context, (uint32_t)f->size);
+		slc_flush_inval();
+		break;
+	}
 	case KCCB_CORECLKSPEEDCHANGE:
 		clock_change();
 		break;
@@ -67,7 +80,6 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 	}
 	case KCCB_LOGTYPE_UPDATE:     /* log_type is read live from the trace control */
 	case KCCB_HEALTH_CHECK:
-	case KCCB_SLCFLUSHINVAL:
 	case KCCB_BP:
 	case KCCB_FREELIST_GROW_UPDATE:
 	case KCCB_FREELISTS_RECONSTRUCTION_UPDATE:

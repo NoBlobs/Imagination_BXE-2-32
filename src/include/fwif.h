@@ -166,10 +166,20 @@ struct kccb_cmd {                        /* rogue_fwif_kccb_cmd, 0x58 bytes */
 		struct { fwaddr_t freelist_fw_addr; uint32_t delta_pages; uint32_t new_pages; uint32_t ready_pages; } grow;
 		struct { uint32_t new_clock_speed; } coreclk;
 		struct { uint32_t config_flags; uint32_t op; } stateflags;
+		struct {                 /* rogue_fwif_slcflushinvaldata (32 bytes) */
+			fwaddr_t context_fw_addr;
+			uint32_t inval;
+			uint32_t dm_context;
+			uint32_t pad;
+			uint64_t address;
+			uint64_t size;
+		} slcflush;
 		uint32_t raw[20];
 	} data;
 };
 static_assert(offsetof(struct kccb_cmd, data) == 8);
+static_assert(offsetof(struct kccb_cmd, data.slcflush.address) == 8 + 16);
+static_assert(offsetof(struct kccb_cmd, data.slcflush.size) == 8 + 24);
 static_assert(sizeof(struct kccb_cmd) == 88);
 
 struct fwccb_cmd {                       /* rogue_fwif_fwccb_cmd, 0x58 bytes */

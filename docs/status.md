@@ -23,7 +23,7 @@ Mesa `pvr`.
 | **Compute (CDM) jobs** | `compute.pipeline.basic` **73/73** of the supported cases ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)), `indirect_dispatch` **24/24**, `builtin_var` **11/11** ([E021](logRefs/E021-watchdog-deadline-wider-compute.md), [E023](logRefs/E023-tq-launch-order-and-dm-flush.md)) |
 | **Event delivery through the MTS IRQ task** | HW2 on every completion ([E018](logRefs/E018-irq-task-delivery.md)); the polls are a backstop |
 | **HWR** | MMU fault or watchdog at the context's `max_deadline_ms` (30 s) → SOFT_RESET pulse → units re-init → discard; ~0.28 ms; 13 recoveries in one dEQP run without a hang ([E019](logRefs/E019-hwr-and-compute-basic-67.md)) |
-| **TQ_3D (transfer) jobs** | correct: `api.fill_and_update_buffer` **72/72**, `api.copy_and_blit.core.buffer_to_buffer` **8/8**, image compute cases pass ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)) |
+| **TQ_3D (transfer) jobs** | correct: `api.fill_and_update_buffer` **72/72**, `buffer_to_buffer` **8/8**, image compute cases pass ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)); most of `api.copy_and_blit.core` passes ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)) |
 | **Statistics and robustness** | GPU utilisation and time correlation, HWR log, FWCCB context-reset notification (overrun and page fault) decoded by the host ([E025](logRefs/E025-stats-and-reset-notification.md)) |
 | **Per-DM completion flush** | front-end, USC/PDS, TPU, MCU fence and SLC flush before every fragment/transfer/compute job is retired ([E023](logRefs/E023-tq-launch-order-and-dm-flush.md)) |
 
@@ -62,12 +62,14 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E026 | `SLCFLUSHINVAL` flushes the SLC; `copy_and_blit` mostly passes (the failures are draws, or offset/NPOT/mirror cases unaffected by extra flushes); stability run to be repeated |
 | E025 | statistics and the HWR log are published; reset notifications reach the host log (`fault address=26c0`); the mainline host only logs them |
 
 ## Next steps
 
-1. Fragment (3D) kick: the spec maps the registers, the phase-D pipe reset and the
-   `0x0F00` launch. Needs the PM/HWRTData load.
-2. Geometry (TA) kick with PM, free lists and partial render (`kick-geometry-ta.md`,
-   `partial-render-spm.md`). Together with the 3D kick this opens `dEQP-VK.draw.*`.
-4. Broader dEQP runs: the rest of `api.copy_and_blit.*` (images, blits) and `api.*`.
+1. Repeat the stability run (`tools/stab-run.sh`) once the board is back on the SD system
+   ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)).
+2. Look closer at `buffer_to_buffer_with_offset` (all 64 fail, off by one).
+3. Questions to the dirty team for the geometry/3D path (PM/HWRTData load, register set,
+   TA state, TA completion, free lists), then the 3D and TA kicks and `dEQP-VK.draw.*`.
+4. Preemption (context store/resume).

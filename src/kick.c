@@ -20,6 +20,8 @@
 #define SLC_FLUSH_INVAL_ALL         0x1u
 #define SLC_STATUS_FLUSH_PENDING    0x4u
 
+static void dm_cache_flush(uint32_t dm);
+
 /* ------------------------------------------------------------ BIF */
 #define BIF_SLOTS 8
 static uint64_t bif_pc[BIF_SLOTS];
@@ -209,6 +211,9 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifdef EXP_SLC_FLUSH_PER_KICK
 	slc_flush_inval();      /* E020: rule out stale SLC lines in the PDS/PBE data */
 #endif
+#ifdef EXP_DM_FLUSH_PER_KICK
+	dm_cache_flush(DM_FRAG);        /* E026: rule out stale TPU/MCU/SLC data between TQs */
+#endif
 #ifndef EXP_FRAG_CTRL
 #define EXP_FRAG_CTRL 1
 #endif
@@ -349,7 +354,7 @@ static void mmu_fault(void)
 #define CR_FLUSH_1720   0x1720
 #define CR_FLUSH_1728   0x1728
 
-[[maybe_unused]] static void dm_cache_flush(uint32_t dm)
+static void dm_cache_flush(uint32_t dm)
 {
 	bool frag = dm == DM_FRAG;
 
