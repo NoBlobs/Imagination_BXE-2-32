@@ -140,18 +140,25 @@ every freelist, OOM, grow and kick event. The global freelist's base, size and s
 change hundreds of times in that run, which makes matching possible.
 
 **1. Global freelist registers.** They are in the `0x2000` block, as **two banks with a
-stride of `0x40`**: PM context 0 at `0x2078`, PM context 1 at `0x20B8`. The trace lines used
-are `UFL-TA-Base`/`UFL-3D-Base`, `Freelist update completed` and `OOM: Resumed TA`.
+stride of `0x40`**. The bank at **`0x20B8` belongs to PM context 0 (geometry)**, the bank at
+**`0x2078` to PM context 1 (fragment)**. This mapping was corrected by Q16g: register sampling
+at the loads shows the geometry load writing `0x20B8` and the fragment load writing `0x2078`.
+The trace lines used are `UFL-TA-Base`/`UFL-3D-Base`, `Freelist update completed` and
+`OOM: Resumed TA`.
 
-| Bank offset | PM ctx 0 | PM ctx 1 | Holds | Evidence |
+| Bank offset | PM ctx 0 (geometry) | PM ctx 1 (fragment) | Holds | Evidence |
 |---|---|---|---|---|
-| `+0x00`/`+0x04` | `0x2078`/`0x207C` | `0x20B8`/`0x20BC` | **global freelist base** (64-bit) | equals the trace base in 24 of 37 snapshots each; the misses are snapshots taken during a base change |
-| `+0x08` | `0x2080` | `0x20C0` | not identified (small values: `0x20`, `0x108`, `0x109`) | — |
-| `+0x10` | `0x2088` | `0x20C8` | **stack pointer** (live; the trace `SP = …`) | see the identity below; `0xFFFF` = 65535 with all 65536 pages free, `9` at the partial render where the trace prints `SP = 9` (corrected by Q16f) |
-| `+0x18` | `0x2090` | `0x20D0` | PB page count at the last freelist update/store | equals the trace "4PB" at those points (11212 at a grow update), then holds its value |
-| `+0x1C` | `0x2094` | `0x20D4` | MMU page count at the same points | equals the trace "4PT" (19, 26, 124…) |
-| `+0x20` | `0x2098` | `0x20D8` | **allocated PB pages** (live) | `65400` at the partial render where the trace prints `4PB = 65400` |
-| `+0x28` | `0x20A0` | `0x20E0` | **allocated MMU pages** (live) | `126` at the same point (`4PT = 126`) |
+| `+0x00`/`+0x04` | `0x20B8`/`0x20BC` | `0x2078`/`0x207C` | **global freelist base** (64-bit) | equals the trace base |
+| `+0x08` | `0x20C0` | `0x2080` | **stack pointer to load** | written at every load and freelist update; the live `+0x10` takes the same value in the same sample (Q16g) |
+| `+0x10` | `0x20C8` | `0x2088` | **live stack pointer** (the trace `SP = …`), maintained by the PM, not writable | see the identity below; `0xFFFF` = 65535 with all 65536 pages free, `9` at the partial render where the trace prints `SP = 9` |
+| `+0x18` | `0x20D0` | `0x2090` | PB page count at the last freelist update/store | equals the trace "4PB" at those points (11212 at a grow update), then holds its value |
+| `+0x1C` | `0x20D4` | `0x2094` | MMU page count at the same points | equals the trace "4PT" (19, 26, 124…) |
+| `+0x20` | `0x20D8` | `0x2098` | **allocated PB pages** (live) | `65400` at the partial render where the trace prints `4PB = 65400` |
+| `+0x28` | `0x20E0` | `0x20A0` | **allocated MMU pages** (live) | `126` at the same point (`4PT = 126`) |
+
+When both PM contexts use the same global freelist (geometry and fragment running from the
+same parameter buffer), both banks are updated together and their live values move
+together.
 
 In every snapshot of two runs, for both banks:
 **stack pointer + allocated PB pages + allocated MMU pages + 1 = total pages** of the
@@ -256,13 +263,88 @@ Example from the first kick (bus addresses; freelist entries are page numbers = 
 The high word of `PM_CAT_BASE_*1` (the public `INIT_PAGE` field, bits 59:40) was non-zero
 only after partial renders (`0x3EF4`, `0x7DE8` in `VCE1`; `0xDD`, `0x1BA` in `TE1`).
 
-**3. Global freelist stack pointer:** `0x2088` (PM context 0) and `0x20C8` (PM context 1); see
-the table under Q16e above. `0x2080` is not the stack pointer.
+**3. Global freelist stack pointer:** the live one is `0x20C8` (PM context 0, geometry) and
+`0x2088` (PM context 1, fragment). It is loaded through `+0x08` of the bank; see the table
+under Q16e above and Q16g below.
 
 **4. `0x0D00` bits 4 and 5.** Not established. Observation only shows the following:
 - At the first kick of this run, `0x0D00` read `0x04`, with the catalogue bases already
   valid; it then read `0x34`/`0x35` while the geometry kept running.
 - The bits are therefore not a direct "PM has pages" indicator.
+
+#### Loading the freelists into the PM (answers Q16g, O)
+
+Four more `bigpb` runs on the open v1.1 image, sampled with a tight host loop (one sample
+every 15–60 µs) instead of event snapshots:
+- run 1: the two global banks, `0x0210`/`0x0224`, `0x0250`/`0x0258`, `0x02A0`, `0x02B0`,
+  `0x0D00` and `PM_CAT_BASE_*0`;
+- run 2: every register in `0x0200–0x02FC`;
+- run 3: every register in `0x0300–0x03FC`;
+- run 4: a mix of the above.
+
+Only changes of value are visible. A register written with the value it already holds, or
+written and cleared within one sample, leaves no trace.
+
+**1. What fills the live stack pointers.**
+- **Global freelist:** the `+0x08` register of the bank. On every load and every freelist
+  update (hundreds per run), `+0x08` and the live `+0x10` change **to the same value in the
+  same sample**, together with the base. Examples:
+  - the first geometry load: `0x20B8` 0 → `0x48900`, `0x20C0` 0 → `0x1BF`, `0x20C8` 0 →
+    `0x1BF` (trace `UFL-TA-Base … SP = 447`);
+  - a fragment load: `0x2078` → `0x3E000`, `0x2080` → `0x20`, `0x2088` → `0x20` (trace
+    `SP = 32`);
+  - a grow/ready-pages update: `0x02A0` 0 → 1, then the base, `+0x08` and the live `+0x10`
+    change together (`0x20C8` 7 → `0x47`), then `0x02A0` 1 → 0.
+
+  The live register is read-only (as the E031 probe found). It is set by writing `+0x08`.
+  The bank of **PM context 0 is at `0x20B8`**, not `0x2078`. `0x2078`/`0x2080`/`0x2088` are
+  the fragment-side bank.
+- **Local freelist:** the live stack pointer is **`0x0348` (PM context 0)** and **`0x0350`
+  (PM context 1)**:
+  - It counts down as the PM takes local pages: `0x1F` → `0x1B` within ~60 µs of the first
+    geometry kick, then 2, 1, 0.
+  - It counts back up as the fragment returns them: 4, `0xA`, `0x10`, `0x12`, `0x1F`.
+  - It does not move while the global freelist is used.
+
+  `0x0224` (loaded stack top, context 0) stays `0x1F` throughout. At each new geometry load
+  `0x0348` returns to `0x1F` with no sampled register changing value in that sample, which
+  fits a rewrite of `0x0224` with the same value (`TO CONFIRM`). At one fragment load,
+  `0x0350` went `0x1F` → 0, matching the trace `FL-3D-Base … SP = 0`. The register that
+  holds the loaded top for context 1 was not identified.
+- **`0x0250`/`0x0258`:** never seen non-zero in any sample. If they are written, they clear
+  within one sample. No load was seen to depend on them.
+
+**2. Memory reads at load time.** None were found to be needed. The values above appear in
+the registers in the same sample as the writes, and no header is involved: the freelist in
+memory is only the host-written stack of page numbers (`pvr_free_list.c`). The PM reads that
+stack when it takes pages (Q16f: catalogue pages are stack entries). It reads it through the
+geometry's memory context, since the freelist base is a GPU virtual address in the
+application's context. Whether the PM prefetches stack entries at load time cannot be seen
+from the host (`TO CONFIRM`).
+
+**3. State right after the geometry load, before the geometry starts** (first kick, run 4;
+order in which values **changed**, not a list of writes):
+
+| Sample (µs from the first change) | Change |
+|---|---|
+| 0 | `0x20B8` → `0x48900`, `0x20C0` → `0x1BF`, `0x20C8` → `0x1BF` |
+| +64 | `0x02B0` → 3, `0x02D8` → this HWRTData's MLIST, **`PM_CAT_BASE_VCE0` → 0** |
+| +121 | `0x0348` `0x1F` → `0x1B`, `PM_CAT_BASE_VCE0` → new valid page; geometry running |
+
+In run 2, the first changes at a first load were:
+- `0x0244` 0 → `0x80` (`0x0240/0x0244` = `0x80_0000_0000`, the base of the general heap;
+  meaning `TO CONFIRM`);
+- then `0x0210`/`0x0214`/`0x0224`;
+- then `0x0248`/`0x024C`, `0x02B0` and `0x02D8`/`0x02DC`;
+- then the ALIST/MLIST stack pointers (`0x0270`, `0x02C0`) and `0x02F8` start counting.
+
+So, just before the geometry starts:
+- `0x20C8` already equals the stack pointer printed by the trace;
+- `0x0348` equals the local top (`0x1F`);
+- `PM_CAT_BASE_VCE0` is 0.
+
+The live global value comes from the `+0x08` write. The write that sets the live local value
+is `TO CONFIRM` (most likely `0x0224`).
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;

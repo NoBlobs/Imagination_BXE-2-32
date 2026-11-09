@@ -121,8 +121,9 @@ Freelist` lines (local freelist registers in [kick-geometry-ta](kick-geometry-ta
 **Not exercised in this run (`PENDING`):** on-demand ZS backing
 (`ZSBUFFER_BACKING`/`_UPDATE`; no `pr_buffer` was provided), and freelist reconstruction
 after HWR (no HWR occurred). The global freelist's registers (base and page counters, one
-bank per PM context at `0x2078`/`0x20B8`) are given in [kick-geometry-ta](kick-geometry-ta.md)
-(Q16e, Q16f), including the live stack pointer (`0x2088`/`0x20C8`).
+bank per PM context: `0x20B8` geometry, `0x2078` fragment) are given in
+[kick-geometry-ta](kick-geometry-ta.md) (Q16e–Q16g), including the live stack pointers
+(global `0x20C8`/`0x2088`, local `0x0348`/`0x0350`).
 
 ## States and flags
 
