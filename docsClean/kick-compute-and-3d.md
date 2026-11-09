@@ -148,7 +148,7 @@ The pixel pipeline needs **two** final writes, in order (**D**/**O**):
    true last write. On multicore it is issued once the fragment core mask covers all cores;
    single-core it is always issued.
 
-> **This is the fix for the clean team's Q8.** Setting `ISP_RENDER` to `0x13` (host
+> **This answers Q8.** Setting `ISP_RENDER` to `0x13` (host
 > `isp_render 0x3` then `| 0x10`) is **not** enough: without the following
 > `BCAST[0x0F00] = 1`, the pipe never starts, `PERF_3D_CYCLE` stays 0 and no
 > `PIXELBE_END_RENDER` arrives — exactly the reported symptom. The reset write
@@ -174,65 +174,130 @@ flag at `cmd+0xE0` bit 0).
 > `ROGUE_CR_BIF_CAT_BASE_INDEX` (PIXEL field) activation as for a 3D kick — a transfer is a
 > sub-case of 3D and needs it too.
 
-### B. Transfer configuration (broadcast)
+### B–D. Registers written by the transfer kick
 
-| Register | Data |
-|---|---|
-| `BCAST[0x0F88]` | `cmd+0x30` |
-| `BCAST[0x06A0 … 0x06BC]` | `cmd+0x78 … +0x8C` |
-| `BCAST[0x0F20/0x0F24]` | `cmd+0x90/0x94` (when applicable) |
-| `BCAST[0x0F28]` | `cmd+0x6C`; `BCAST[0x0FC8] = 0`, `BCAST[0x0FCC] = 0xE4` |
+All writes go through the broadcast bank. Unless stated, a value is the host's
+`rogue_fwif_transfer_regs` field, written unchanged.
 
-### C. ISP and output
+> **Provenance.** Registers, values and conditions: **D**. Field roles: **P** (public
+> header, and public Mesa: `csbgen/rogue/cr.xml`, `include/hwdef/rogue_hw_defs.h`,
+> `vulkan/pvr_arch_job_transfer.c`). Field names marked `TO CONFIRM` are inferred from the
+> position of the value in the public layout and were not checked independently.
 
-- ISP (same registers as 3D): `BCAST[0x4070]` = control value,
-  `BCAST[0x4078/0x4080/0x4088/0x4090]` = the four `usc_clear_register*`, `BCAST[0x3E40]`,
-  `BCAST[0x0F18]`, `BCAST[0x0F10]`, `BCAST[ROGUE_CR_ISP_CTL]` (`0x0F38`) = `isp_ctl`,
-  `BCAST[0x0F30]`.
-- **`BCAST[0x0FD8]` = tiles-in-flight**, a small count `min((isp_ctl >> 12 & 0xF) + 1, 2)`
-  — **not an address** (this is the value the TQ table left blank).
-- **`isp_mtile_base` → `BCAST[0x0F20]`/`[0x0F24]` (64-bit), written only when
-  `(isp_render & 3) == 2`.** For `isp_render = 3` it is **correctly skipped**, so a host
-  `isp_mtile_base = 0` is harmless — do **not** write `0x0F20` unconditionally.
-- Background/end-of-tile PDS: `pds_bgnd0_base → BCAST[0x06A0]/[0x06A4]`,
-  `pds_bgnd1_base → BCAST[0x06A8]/[0x06AC]`, `pds_bgnd3_sizeinfo → BCAST[0x06B8]/[0x06BC]`.
-- **No ZS** (transfer has no depth/stencil): `BCAST[0x0FA8] = BCAST[0x0FAC] = 0x88888888`;
-  `BCAST[0x0F48] = 0`, `BCAST[0x0F4C] = 0`.
-
-#### Output / PBE state — destination surface (answers Q12)
-
-The transfer's **destination address is encoded in the PBE state words**, written to **two
-register banks** (there is **no** separate "PBE dest base" register):
-
-| Register | Source | Role |
+| Register | Value | Written when |
 |---|---|---|
-| `BCAST[0x1510 + 8·n]` (`+0`/`+4`) | `pbe_wordx_mrty[2·n]` | **PBE WORD0** of render target *n* |
-| `BCAST[0x1550 + 8·n]` (`+0`/`+4`) | `pbe_wordx_mrty[2·n + 1]` | **PBE WORD1** of render target *n* |
+| `ROGUE_CR_MULTICORE_FRAGMENT_CTRL_COMMON` | control value | always |
+| `0x0F88` | `isp_bgobjvals` (`TO CONFIRM`) | always |
+| `0x06A0`/`0x06A4` | `pds_bgnd0_base` (64-bit) | always |
+| `0x06A8`/`0x06AC` | `pds_bgnd1_base` (64-bit) | always |
+| `0x06B8`/`0x06BC` | `pds_bgnd3_sizeinfo` (64-bit) | always |
+| `ROGUE_CR_ISP_RENDER` | `isp_render` | always (see ordering) |
+| `0x0F20`/`0x0F24` | `isp_mtile_base` (64-bit) | only if `(isp_render & 3) == 2` |
+| `0x0F28` | `isp_rgn` (`TO CONFIRM`) | only if `(isp_render & 3) == 2` |
+| `0x0FC8` / `0x0FCC` | `0` / `0xE4` | only if `(isp_render & 3) == 2` |
+| `0x4070` | `usc_pixel_output_ctrl` | always |
+| `0x4078`, `0x4080`, `0x4088`, `0x4090` | `usc_clear_register0..3` | always |
+| `0x3E40` | `frag_screen` | always |
+| `0x0F18` | `isp_mtile_size` | always |
+| `0x0F10` | `isp_render_origin` | always |
+| `0x0FD8` | tiles in flight = `min(((isp_ctl >> 12) & 0xF) + 1, 2)` | always |
+| `ROGUE_CR_ISP_CTL` | `isp_ctl` | always |
+| `0x0F30` | `isp_aa` (`TO CONFIRM`) | always |
+| `0x0FA8` / `0x0FAC` | `0x88888888` / `0x88888888` | only if `(value written to 0x0F30) & 3 != 0` |
+| `0x0F48` / `0x0F4C` | `0` / `0` | always |
+| `0x0628` | `event_pixel_pds_info` | always |
+| `0x0618` | `event_pixel_pds_code` | always |
+| `0x0620` | `event_pixel_pds_data` | always |
+| `0x1510 + 8·n` / `0x1550 + 8·n` | `pbe_wordx_mrty[2n]` / `pbe_wordx_mrty[2n+1]` | per render target *n* |
+| `0x0388` | `0` (no public name; role unknown) | always |
 
-- There are exactly **16 writable 64-bit registers**: WORD0 bank `0x1510…0x1548`, WORD1 bank
-  `0x1550…0x1588` (8 render targets). The firmware consumes **2 words per render target**,
-  as **consecutive** pairs of `pbe_wordx_mrty` (`[0,1]` → RT0, `[2,3]` → RT1, …). Although
-  the public struct reserves `ROGUE_PBE_WORDS_REQUIRED_FOR_TQS = 3` words per target, **the
-  firmware uses only 2 of them**; the 3rd is not written.
-- **This is the Q12 bug.** The layout is **not** `0x1510 + 8·(3n+k)` (3 interleaved words
-  per RT). If you write WORD1 to `0x1518` (the interleaved position), the real WORD1 register
-  `0x1550` stays 0 — and since the destination address lives in the PBE state, the PBE then
-  writes to **address 0** (the observed `REQ_STATUS` write to `0x0`). Write WORD0 to
-  `0x1510+8n` and WORD1 to `0x1550+8n` and the destination resolves correctly. For the
-  single-render-target `copy_ssbo_to_image` case, RT0 is `pbe_wordx_mrty[0]→0x1510`,
-  `pbe_wordx_mrty[1]→0x1550`.
-- **The faulting requester** (BIF tag of the write to 0) is the **PBE / pixel-emit path** —
-  the unit that writes the output surface — consistent with a zeroed PBE destination. There
-  is no additional destination register the kick must program beyond WORD0/WORD1 above.
+A register listed with a condition is **not written** when the condition is false. This
+analysis does not establish what happens if such a register is written anyway.
 
-### D. Trace, watchdog and trigger
+**Ordering.** Only these constraints are required:
 
-As for 3D: trace MAIN id 121 `Kick 3D TQ: FWCtx … @ …, CSW resume:…. (PID:…, …)`,
-watchdog, then the **two-write trigger** — `BCAST[ROGUE_CR_ISP_RENDER] |= 0x10`, then
-`BCAST[0x0F00] = 1` (the real launch). `0x06B0` is **not** written by the transfer kick.
+- the DM 3 memory-context activation comes first, and if it fails nothing in the table is
+  written and the kick is skipped;
+- the last two writes are `ROGUE_CR_ISP_RENDER |= 0x10` and then `0x0F00 = 1` (see 3D
+  phase F).
 
-**Completion (Q8):** a TQ_3D ends on **`PIXELBE_END_RENDER`** (`ROGUE_CR_EVENT_STATUS` bit 3),
-the same event as a normal 3D render; it is handled by the shared 3D-completion path.
+Everything else in the table may be written in any order. The analysed firmware writes
+`ROGUE_CR_ISP_RENDER = isp_render` once before the other configuration registers and then
+does the `| 0x10` at launch. Whether that early write is required has **not** been
+established.
+
+#### Output / PBE state
+
+| Register | Value | Content |
+|---|---|---|
+| `0x1510 + 8·n` (`+0`/`+4`) | `pbe_wordx_mrty[2n]` | PBE register word 0 of render target *n* |
+| `0x1550 + 8·n` (`+0`/`+4`) | `pbe_wordx_mrty[2n+1]` | PBE register word 1 of render target *n* |
+
+A transfer uses **2 PBE register words per render target**, stored as consecutive pairs
+(public Mesa `ROGUE_NUM_PBESTATE_REG_WORDS_FOR_TRANSFER = 2`). The remaining entries of the
+9-entry `pbe_wordx_mrty` array are not written. These register words hold format, stride,
+swizzle and clip. **They do not hold the destination address** (see below).
+
+#### Pixel-event program and destination address (answers Q13)
+
+1. **Where the destination address is.** It is **not** in `pbe_wordx_mrty`. The PBE has two
+   kinds of words. The **register** words above carry format, stride, swizzle and clip. The
+   **state** words carry the surface address (`address_low`/`address_high`). The host places
+   the state words in the **data segment of the end-of-tile pixel-event program** it builds
+   for the transfer, and points `event_pixel_pds_code`/`event_pixel_pds_data` at that
+   program (**P**, public Mesa). So the host does leave the address to the end-of-tile emit.
+   The firmware never sees the address and programs no destination register.
+   *This corrects the Q12 answer, which said the address was in the PBE register words.*
+2. **`0x0618`/`0x0620`/`0x0628`.** The transfer kick writes all three, each with the host's
+   32-bit value unchanged: `0x0628 ← event_pixel_pds_info`, `0x0618 ← event_pixel_pds_code`,
+   `0x0620 ← event_pixel_pds_data`. Their roles, from the public Mesa field layouts:
+
+   | Register | Role | Fields |
+   |---|---|---|
+   | `0x0618` | pixel-event PDS **code** address | `addr` bits 31:4, 128-bit granular |
+   | `0x0620` | pixel-event PDS **data** address | `addr` bits 31:4, 128-bit granular |
+   | `0x0628` | pixel-event **info** | `const_size` 4:0, `temp_stride` 8:5, `usc_sr_size` 14:9 |
+
+   The pixel-event task is **skipped** when `const_size` or `usc_sr_size` is 0. That explains
+   why no `PIXELBE_END_RENDER` arrives when these registers are left unprogrammed.
+
+   `0x0618` is the code address, not a control register, and the code address is not derived
+   from data + size. The 3D kick writes a fixed `0x80` there because `rogue_fwif_frag_regs`
+   has **no** `event_pixel_pds_code` field. It does have `event_pixel_pds_info` and
+   `event_pixel_pds_data` (public offsets 60 and 72), and the 3D kick writes them to `0x0628`
+   and `0x0620`, which is consistent with the roles above.
+
+   The code and data values are **offsets** into the PDS heap: they resolve against the PDS
+   execution base (`0x0610/0x0614`, see [boot-gpu-init](boot-gpu-init.md)). The USC
+   end-of-tile program that the PDS program starts lives in the USC heap and resolves
+   against the USC execution base (**P**, public Mesa).
+
+   The reported host values decode as follows: `info = 0x202` gives `const_size = 2`,
+   `temp_stride = 0` and `usc_sr_size = 1`, so the task runs.
+3. **Anything else the pixel-event task needs.** The table above is the complete set of
+   registers the transfer kick writes:
+   - There is **no** per-kick shared-register allocation register. The pixel-event task's
+     shared-register size comes from `usc_sr_size` in `event_pixel_pds_info`, and the
+     unit-level shared/temp register setup is done once at boot (`0x06D8`, `0x4050` in
+     [boot-gpu-init](boot-gpu-init.md)).
+   - **`0x4070`** is the USC pixel-output control, loaded from `usc_pixel_output_ctrl`. It is
+     the same register the 3D kick loads from `rogue_fwif_frag_regs.usc_pixel_output_ctrl`.
+   - **`0x0F10`** is the render origin. The transfer kick writes the host's
+     `isp_render_origin`; the 3D kick writes `0` because `rogue_fwif_frag_regs` has no such
+     field. Both are correct.
+
+**Open point.** The analysis does not show which value makes the end-of-tile write land on
+address 0. The emit takes the address from the pixel-event program's data at run time, so a
+write to 0 means the PBE state words, as the GPU reads them, are zero. Hypotheses, consistent
+with the observations but unverified:
+
+- the PDS data address does not resolve to the host's upload (check the PDS execution base
+  plus `event_pixel_pds_data`, against the address the host gave);
+- the host's upload is not visible to the GPU when the task runs;
+- a conditional register from the table was written outside its condition.
+
+**Completion:** a TQ_3D ends on **`PIXELBE_END_RENDER`** (`ROGUE_CR_EVENT_STATUS` bit 3), the
+same event as a normal 3D render. `0x06B0` is **not** written by the transfer kick.
 
 ---
 
