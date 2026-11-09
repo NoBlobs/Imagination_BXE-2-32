@@ -126,8 +126,8 @@ Other answers:
 - **`PM_CAT_BASE_*` on a first kick:** bank 0 (`…0`) receives new, valid (bit 0 = 1)
   entries at **every** geometry kick, including first kicks where the host left the
   HWRTData catalogue bases at 0. Bank 1 (`…1`) takes the same values at the fragment kick.
-  This is consistent with the PM filling bank 0 itself during the geometry; whether the
-  firmware writes the bank before the kick is `TO CONFIRM`. The second word of
+  The PM fills bank 0 itself during the geometry, from the local freelist (see Q16f
+  below). The second word of
   `VCE0`/`TE0` (`0x124C`/`0x1254`) becomes non-zero only around partial renders.
 - **Other PM enables:** `ROGUE_CR_PM_PARTIAL_RENDER_ENABLE` (`0x0338`) read 0 in every
   snapshot, and `0x03E0` read 1 throughout. A separate PM "context select" or "start"
@@ -146,10 +146,17 @@ are `UFL-TA-Base`/`UFL-3D-Base`, `Freelist update completed` and `OOM: Resumed T
 | Bank offset | PM ctx 0 | PM ctx 1 | Holds | Evidence |
 |---|---|---|---|---|
 | `+0x00`/`+0x04` | `0x2078`/`0x207C` | `0x20B8`/`0x20BC` | **global freelist base** (64-bit) | equals the trace base in 24 of 37 snapshots each; the misses are snapshots taken during a base change |
-| `+0x18` | `0x2090` | `0x20D0` | **allocated PB pages** ("4PB" / `Alloc Page Count`) | exactly 11212 at a grow update; tracks the trace afterwards |
-| `+0x1C` | `0x2094` | `0x20D4` | **allocated MMU pages** ("4PT" / `Alloc MMU Page Count`) | equal to the trace "4PT" (19, 26, 124…) |
-| `+0x28` | `0x20A0` | `0x20E0` | same value as `+0x1C` | 12 of 13 matches |
-| `+0x08`, `+0x10`, `+0x20` | `0x2080`, `0x2088`, `0x2098` | `0x20C0`, `0x20C8`, `0x20D8` | not identified; they change with the freelist | the global **stack pointer** printed by the trace (`SP = …`) was **not** found as a plain value in this block (`TO CONFIRM`) |
+| `+0x08` | `0x2080` | `0x20C0` | not identified (small values: `0x20`, `0x108`, `0x109`) | — |
+| `+0x10` | `0x2088` | `0x20C8` | **stack pointer** (live; the trace `SP = …`) | see the identity below; `0xFFFF` = 65535 with all 65536 pages free, `9` at the partial render where the trace prints `SP = 9` (corrected by Q16f) |
+| `+0x18` | `0x2090` | `0x20D0` | PB page count at the last freelist update/store | equals the trace "4PB" at those points (11212 at a grow update), then holds its value |
+| `+0x1C` | `0x2094` | `0x20D4` | MMU page count at the same points | equals the trace "4PT" (19, 26, 124…) |
+| `+0x20` | `0x2098` | `0x20D8` | **allocated PB pages** (live) | `65400` at the partial render where the trace prints `4PB = 65400` |
+| `+0x28` | `0x20A0` | `0x20E0` | **allocated MMU pages** (live) | `126` at the same point (`4PT = 126`) |
+
+In every snapshot of two runs, for both banks:
+**stack pointer + allocated PB pages + allocated MMU pages + 1 = total pages** of the
+freelist (for example `0xAEA + 0x2102 + 0x13 + 1 = 11264`). The stack pointer counts down as
+the PM hands out pages.
 
 The **local** freelist has no copy in the `0x2000` block. Its registers are the
 `0x0210`/`0x0218`, `0x0224` and `0x0398`/`0x039C` given above.
@@ -180,6 +187,82 @@ exclude, and the observation cannot produce it anyway. What this spec gives is t
 registers, their values and sources, and the ordering constraints the hardware imposes.
 Registers that are written and then self-clear during the kick are, by construction,
 invisible to these snapshots (`PENDING`).
+
+#### PM page catalogues on a first kick (answers Q16f, O)
+
+A third `bigpb` run on the open v1.1 image read, at each geometry kick, the `PM_CAT_BASE_*`
+registers, both freelists' page stacks and the HWRTData. All reads were done from the host,
+through the GPU page tables of the application's memory context. Six geometry kicks were
+examined; they include first kicks of both HWRTData.
+
+**1. Who fills `PM_CAT_BASE_*0`.** The **PM**, during the geometry, with pages it takes from
+the **local** freelist. Evidence:
+- At the first kick, the HWRTData's `vce_cat_base[]`, `te_cat_base[]` and `alist_cat_base`
+  are all 0 (the host leaves them at 0).
+- While that geometry runs, `PM_CAT_BASE_VCE0`, `TE0` and `ALIST0` are valid (bit 0 = 1).
+  Their `ADDR` fields are pages of the local freelist's stack: entries **29, 18 and 13**,
+  with the stack top loaded at 31 (trace `FL-TA-Base … SP = 31`).
+- The positions were the **same in all six kicks**, although the stack's contents were in a
+  different order each time (pages come back in a different order).
+- The three pages are **not consecutive** stack entries: other pages were handed out between
+  them. This is what on-demand allocation by the PM looks like, not a preamble that takes
+  pages before the kick.
+
+Nothing was found that the firmware writes to make this happen besides the freelist and PM
+context registers already described (local and global freelist, `CONTEXT_PB_BASE`, VHeap,
+MLIST). No separate enable was identified. Whether the firmware also writes
+`PM_CAT_BASE_*0` (for example to 0) before a first kick is `TO CONFIRM`: such a write would
+be overwritten before any snapshot.
+
+Two corrections to the reading of the earlier answers:
+- **`0x0224` does not move while the PM allocates.** In the original it stays `0x1F` during
+  geometry, even after the PM has taken all 32 local pages (stores report `SP = 0`). It holds
+  the stack top **as loaded**, not the live one. A stalled `0x0224 = 0x1F` is therefore not
+  in itself the symptom. The live local stack pointer was not identified: it reaches 0
+  quickly, and the snapshots only list non-zero registers.
+- Bank 1 (`…1`) at a geometry kick still holds the **previous** HWRTData's catalogue pages,
+  which may already have been freed and reused for other data.
+
+**2. Relation to HWRTData and freelists.** The catalogue pages come from the **local
+freelist**, not from the HWRTData's own buffers. In this run, `pm_mlist_dev_addr`,
+`vheap_table_dev_addr`, `macrotile_array_dev_addr` and `rgn_header_dev_addr` translate to
+bus pages `0x84E86000`/`0x84E87000`, `0x84E83000`, `0x84E84000` and
+`0x84E88000`/`0x84E89800`. These are outside the freelist and differ from every
+`PM_CAT_BASE` value.
+
+Example from the first kick (bus addresses; freelist entries are page numbers = bus address
+>> 12, as the host writes them):
+
+| Item | Value |
+|---|---|
+| local freelist base / stack top at load | `0x80_00AB_D000` / 31 |
+| local freelist entries 0…31 | `0x84E63`, `0x84E64`, … `0x84E82` (consecutive at the first kick) |
+| global freelist base / stack top at load | `0x80_0004_8900` / 447 |
+| `PM_CAT_BASE_VCE0` | `0x0000_0000_84E8_0001` = entry 29 |
+| `PM_CAT_BASE_TE0` | `0x0000_0000_84E7_5001` = entry 18 |
+| `PM_CAT_BASE_ALIST0` | `0x0000_0000_84E7_0001` = entry 13 |
+| `VCE1`, `TE1`, `ALIST1` | 0 (no fragment yet) |
+
+**What the catalogue pages contain.** While the geometry runs:
+- The first 32-bit word of each catalogue page is `(page number << 4) | 1`. The page number is
+  another page of the local freelist: `0x0084E7F1` in the `VCE0` page points to page
+  `0x84E7F`.
+- Further entries in later snapshots are 64-bit, `bus address | 0x11`, and point to pages
+  **outside** the local freelist (`0x8F796011`, `0x96F85011`, …). These are consistent with
+  parameter-buffer pages from the global freelist (`TO CONFIRM`).
+- The `ALIST1` page holds a list of 64-bit `bus address | 1` entries for local-freelist
+  pages.
+
+The high word of `PM_CAT_BASE_*1` (the public `INIT_PAGE` field, bits 59:40) was non-zero
+only after partial renders (`0x3EF4`, `0x7DE8` in `VCE1`; `0xDD`, `0x1BA` in `TE1`).
+
+**3. Global freelist stack pointer:** `0x2088` (PM context 0) and `0x20C8` (PM context 1); see
+the table under Q16e above. `0x2080` is not the stack pointer.
+
+**4. `0x0D00` bits 4 and 5.** Not established. Observation only shows the following:
+- At the first kick of this run, `0x0D00` read `0x04`, with the catalogue bases already
+  valid; it then read `0x34`/`0x35` while the geometry kept running.
+- The bits are therefore not a direct "PM has pages" indicator.
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
