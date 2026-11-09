@@ -111,8 +111,8 @@ In both, register snapshots were compared with the values printed by the public
 | `0x0210`/`0x0214` | **local** freelist base (`freelist_dev_addr`) of **PM context 0** | changes at the geometry load; equals the trace "FL-addr" |
 | `0x0218`/`0x021C` | the same for **PM context 1** | changes only at the fragment load, to the same address |
 | `0x0224` | local freelist **stack top** | `0x1F` at rest (32 pages → total − 1), `0` when exhausted; equals the trace "stacktop" |
-| `0x0398` | local freelist **allocated page count** | `6` and `20` in the two runs = trace "Alloc Page Count" |
-| `0x039C` | local freelist **allocated MMU page count** | `9` and `11` = trace "Alloc MMU Page Count" |
+| `0x0398` | local freelist **allocated page count as loaded for PM context 1** (corrected by Q16k; the live counts are `0x03A0`/`0x03A8`) | `6` and `20` in the two runs = trace "Alloc Page Count" |
+| `0x039C` | local freelist **allocated MMU page count as loaded for PM context 1** (corrected by Q16k; the live counts are `0x2000`/`0x2008`) | `9` and `11` = trace "Alloc MMU Page Count" |
 | `0x02D8`/`0x02DC` (PM context 0), `0x02E0`/`0x02E4` (PM context 1) | a per-HWRTData address | alternates between the two HWRTData of `bigpb` at each geometry kick, and is copied to the context 1 pair at the fragment kick. Consistent with `pm_mlist_dev_addr` (`TO CONFIRM`: the HWRTData contents could not be read to match the value) |
 | `0x0270/0x0278/0x0280`, `0x02C0/0x02C8/0x02D0` | ALIST / MLIST stack pointers | the first register of each triple follows the geometry, the other two take its value at the fragment kick |
 
@@ -166,7 +166,7 @@ freelist (for example `0xAEA + 0x2102 + 0x13 + 1 = 11264`). The stack pointer co
 the PM hands out pages.
 
 The **local** freelist has no copy in the `0x2000` block. Its registers are the
-`0x0210`/`0x0218`, `0x0224` and `0x0398`/`0x039C` given above.
+`0x0210`/`0x0218`, `0x0224` and `0x0398`/`0x039C` given above, and the registers of Q16k.
 
 **2. Starting the PM.** `PM_PAGE_MANAGEOP` (`0x02A0`) read **0 in all 37 snapshots**,
 including while the geometry was running and allocating. It goes to 1 only briefly, around
@@ -625,6 +625,106 @@ stack pointers. Observation cannot see it: it leaves no value change, and probin
 writes causes faults. The spec maintainer will not answer it with a write list from the
 original's code. A functional statement of the trigger, without a sequence, is a decision
 for the project owner.
+
+#### Experiments on PM loading, freeing and storing (answers Q16k, O)
+
+Eight `bigpb` runs and one `xfer` run on the open v1.1 image, after a fresh reboot. All reads were done from the host, with **no register writes** (the write probes of
+Q16j caused recoveries and were not repeated). No run had a recovery. Each experiment tested
+one expected behaviour.
+
+**Experiment A: load-command pulses.** Purpose: catch the command registers that would
+make the PM copy loaded values into its live state.
+- Candidates: `0x0190`, `0x0200`, `0x0208`, `0x0288`, `0x20A8`, `0x20B0`.
+- Method: sampled together over a whole run, then `0x20B0` and `0x0190` each alone in the
+  tightest host loop (≤ 3 µs per read, an upper bound measured with printing on).
+- **Result:** all read **0 in every sample**. Any write of 1 to them clears in less than one
+  host read. This is consistent with self-clearing commands, but the observation cannot
+  confirm their role (`TO CONFIRM` by implementation).
+
+**Experiment B: ALIST/MLIST stack pointers of PM context 1** (`0x0268`–`0x02D0`, `0x03D0`,
+`0x03D4`, `0x0388`, `EVENT_STATUS`, `0x0348`, `0x0350`; ~10 µs per sample).
+
+At every fragment load, in this order:
+1. `0x03D0` gets bit 16 (`0x100` → `0x10100`) and `0x03D4` gets bit 8 (`0x1` → `0x101`).
+   At every geometry load both bits are cleared again.
+2. In the same or the next sample, `0x0278` (ALIST, 64-bit with `0x027C`) and `0x02C8` (MLIST) take the
+   values printed by the trace line `Loading stack-pointers for 1 (0:MidTA,1:3D) on context
+   1, MLIST = …, ALIST = …` (for example `0x5F14`/`0x68`). In the **same** sample `0x0280`
+   and `0x02D0` take the same values.
+
+So `0x0278`/`0x02C8` are the values to load for context 1, and `0x0280`/`0x02D0` are the live
+copies.
+
+Context 0 works the same way:
+- At every new geometry load, the live `0x0270` (ALIST) and `0x02C0` (MLIST) drop to **0**,
+  in the sample after the `0x03D0`/`0x03D4` bits are cleared.
+- `0x0268`/`0x026C` and `0x02B8` read 0 for the whole run.
+
+This fits a context-0 load of zero stack pointers at each first geometry kick. The value
+registers hold 0, so their write is invisible.
+
+**Experiment C: what the store reads** (`0x0348`, `0x0350`, `0x03A0`, `0x03A8`, `0x2000`,
+`0x2008`, the global banks, `0x0390–0x039C`, `0x0220–0x0234`).
+- **Live local counts:**
+  - `0x03A0` (context 0) and `0x03A8` (context 1) rise to **20**;
+  - `0x2000` (context 0) and `0x2008` (context 1) rise to **11**;
+  - these are the trace's local `4PB = 20`, `4PT = 11`.
+  - `0x2000` is the register seen going `0 → 3 → 9` at the first kick (Q16i): it is the live
+    local MMU-page count of context 0.
+- **Load registers:** they stay constant over the run, as load registers should:
+  - `0x0390`/`0x0394` = 0/0 (context-0 counts at a first kick);
+  - `0x0398`/`0x039C` = 20/11 (context-1 counts loaded at the fragment kick);
+  - `0x0220`/`0x0224` = 0/`0x1F` (context-0 local top, in the high word);
+  - `0x0230`/`0x0234` = 0/0. This matches the fragment loads in this workload, which carry a
+    local top of 0; a 64-bit layout with the top from bit 22 is `TO CONFIRM`.
+- **End of the run:** the four final `Store Freelist` trace lines (local and global, PM
+  contexts 0 and 1) printed stack tops `0x1F`/`0xFFFF` with counts 0. These equal the live
+  registers at that time:
+  - local: `0x0348`/`0x0350` with `0x03A0`/`0x03A8` and `0x2000`/`0x2008`;
+  - global: `0x20C8`/`0x2088` with `0x20D8`/`0x2098` and `0x20E0`/`0x20A0`.
+
+  No register outside these changed at the stores, so no separate store command was seen.
+
+**Experiment D: `0x0388` around a transfer** (`xfer`, then `bigpb`).
+- `0x0388` stays **1** for a whole `bigpb` run.
+- It goes 1 → 0 when the transfer job runs, and 0 → 1 at the next fragment kick of a render.
+
+So the fragment kick sets `0x0388` back to 1 after a transfer cleared it.
+
+**Experiment E: the end-of-render events** (`EVENT_STATUS` alone, tight loop). For every
+render, 13 out of 13:
+
+| Time | `EVENT_STATUS` |
+|---|---|
+| t | `PIXELBE_END_RENDER` (bit 3) set |
+| t + 0.4 … 2.5 ms | **`PM_3D_MEM_FREE` (bit 8)** set |
+| + 3–7 µs | bit 8 cleared |
+| + ~35 µs | bit 3 cleared |
+
+`ZLS_FINISHED` (bit 14) was also set in 6 of the 13 renders.
+
+**Experiment F: what happens between the two events** (`EVENT_STATUS`, `0x0350`, `0x2088`).
+At `PIXELBE_END_RENDER`:
+- the local live stack pointer of context 1 still reads **`0x10`–`0x12`**;
+- the global one reads the render's level (for example `0x2818`).
+
+Both then **climb back to the full stack**: `0x0350` → `0x1F`, and `0x2088` → `0x2BFF` /
+`0xFFF7` / `0xFFFF`, which is total − 1, minus the pages still held. They finish **just
+before** `PM_3D_MEM_FREE`, 0.44–2.5 ms after the end of the render; the time grows with the
+number of pages to return.
+
+So, after the pixel back end finishes:
+- the **PM returns the render's pages to both freelists by itself**;
+- it signals completion with `PM_3D_MEM_FREE`;
+- the firmware clears that event and only then the end-of-render event.
+
+No register write by the firmware was visible during the freeing.
+
+**What this means for an implementation where `0x0350` stops at `0x10` after the render.** The
+PM did not free the pages. Experiments B and F together show that freeing follows from the
+context-1 ALIST/MLIST stack pointers being **live** (`0x0280`/`0x02D0` equal to the loaded
+values) when the render ends. Writing `0x0278`/`0x02C8` alone is not enough. Experiment A
+cannot see the step that makes them live.
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
