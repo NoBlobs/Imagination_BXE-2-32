@@ -70,6 +70,6 @@ Mesa `pvr`.
 1. Repeat the stability run (`tools/stab-run.sh`) once the board is back on the SD system
    ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)).
 2. Look closer at `buffer_to_buffer_with_offset` (all 64 fail, off by one).
-3. Questions to the dirty team for the geometry/3D path (PM/HWRTData load, register set,
-   TA state, TA completion, free lists), then the 3D and TA kicks and `dEQP-VK.draw.*`.
+3. Answers to Q15–Q26 ([questions.md](questions.md)), then the 3D and TA kicks, SPM and
+   `dEQP-VK.draw.*`.
 4. Preemption (context store/resume).

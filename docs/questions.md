@@ -7,10 +7,213 @@ Gaps found while implementing from `docsClean/`. Each one is a functional questi
 following the question flow in `docsClean/clean-room-process.md`. Until a question is
 answered, the implementation uses the stated assumption.
 
-## Open
+## Open — what is still missing to finish the clean firmware
 
-No open questions at the moment. The next items (3D and geometry kicks) are covered by the
-spec and are implementation work.
+Status when these were written (2026-11-09): compute, transfers through the 3D pipe (TQ_3D),
+power, HWR, statistics and the robustness notification all work on the board. Every
+supported case passes in `compute.pipeline.basic`/`indirect_dispatch`/`builtin_var`,
+`api.fill_and_update_buffer` and `api.copy_and_blit.core.buffer_to_buffer`. **Nothing can be
+drawn yet:** the geometry (TA) and fragment (3D) kicks are missing, and so are the
+parameter-buffer handling (PM, free lists, partial renders) and preemption.
+
+The questions below list what is not in `docsClean/` and not in any public source. Field
+names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core bank and
+`BCAST[x]` the broadcast bank, as in the spec. They are ordered by how much they block.
+
+### A. Geometry (TA) kick — blocks all rendering
+
+#### Q15 — What is a "register set"?
+
+`kick-geometry-ta.md` writes `CR[set+0xC00…0xC98]`, `CR[set+0xCB0…0xCE0]`,
+`CR[set+0x4098]` and the run register `CR[set+0x400]`, and says the set's displacement is
+part of the offset. The trace says "Setup register set=1 DM=…", which matches the BIF slot
+the firmware picks.
+- Is the register set the BIF catalogue slot (1–7) chosen by the memory-context
+  activation, or a separate index?
+- How is `set` turned into an address: base offset and stride per set? For set 1, what is
+  the absolute offset of `set+0x400` and of `set+0xC00`?
+- Do compute and transfer use register sets too? (Today they only use `CAT_BASE_INDEX`
+  and that works.)
+
+#### Q16 — Loading the HWRTData into the PM, geometry phase
+
+Phase B says "the command's HWRTData is loaded into the PM, for the geometry buffer and
+for the list (MLIST)", then gives only the handshakes `CR[0x250]`/`CR[0x258]`. The sequence
+itself is needed:
+- **Which registers** receive which fields of `rogue_fwif_hwrtdata`?
+  - `pm_mlist_dev_addr`, `pm_mlist_stack_pointer`, `pm_alist_stack_pointer`;
+  - `vce_cat_base[4]`, `te_cat_base[4]`, `alist_cat_base` and their `*_last_cat_base`.
+    The public `ROGUE_CR_BIF_PM_CAT_BASE_VCE0/TE0/ALIST0/VCE1/TE1/ALIST1` are at
+    `0x1248–0x1280`: which of the two banks, and how do the 4 entries map?
+  - `vheap_table_dev_addr`, `tail_ptrs_dev_addr`, `macrotile_array_dev_addr`,
+    `rgn_header_dev_addr`, `rtc_dev_addr`.
+- **Free lists:** from `freelists_fw_addr[]` (local and global), which `rogue_fwif_freelist`
+  fields (`freelist_dev_addr`, `current_dev_addr`, `current_stack_top`, `current_pages`,
+  `ready_pages`, `pm_global_pb`) go to which PM registers?
+- **First kick vs later kicks** of the same render (`ROGUE_GEOM_FLAGS_FIRSTKICK`,
+  state `KICK_GEOM_FIRST`/`KICK_GEOM`): what is loaded only on the first kick, and what is
+  reloaded from the HWRTData on later kicks?
+- **Order:** where do these writes go relative to the `0x250`/`0x258` handshakes?
+
+#### Q17 — Register-set values that come from state, not from the command
+
+The phase-C table names their sources only as "state":
+- `CR[set+0xC28]`, "context RTData address in the PM": which value exactly (an address
+  from the HWRTData, an index)?
+- `CR[set+0xC38]`/`CR[set+0xC40]`: what is written before the poll, and which value is
+  awaited?
+- `CR[set+0xC88…0xC98]`: the spec says the split of `vdm_ctrl_stream_base` and the control
+  field can be finished "from public field widths". Please give the exact words written to
+  `+0xC88`, `+0xC90`, `+0xC98` for a first kick, and which command flag selects
+  `tpu_border_colour_table` versus `vdm_draw_indirect0` in `+0xC80`.
+- `CR[set+0x4098]` (byte): which command field?
+- `rogue_fwif_geom_regs.ppp_ctrl`: the spec says it is consumed by the PM/HWRTData load
+  path. Which register receives it?
+- **`rogue_fwif_hwrtdata_common`** (`screen_pixel_max`, `multi_sample_ctl`, `tpc_stride`,
+  `tpc_size`, `te_screen`, `mtile_stride`, `teaa`, `te_mtile1/2`, `isp_merge_*`,
+  `rgn_header_size`, `isp_mtile_size`): which of these does the firmware write, to which
+  registers, and in the TA kick, the 3D kick, or both?
+
+#### Q18 — TA state buffer and context registers for a new (non-resumed) kick
+
+Phase D lists `CR[set+0xCE0]`, `CR[set+0xCB0]` (poll), `CR[set+0xCB8] = 1`,
+`CR[set+0xC48]` and `CR[0xD20]` = state buffer address, without values.
+- What is written to each for a **new** kick, and from which fields?
+  `rogue_fwif_geom_registers_caswitch` (`geom_reg_vdm_context_state_base_addr`,
+  `…_resume_addr`, `geom_reg_ta_context_state_base_addr`) and
+  `rogue_fwif_geom_ctx_state_per_geom` (`geom_reg_vdm_call_stack_pointer(_init)`) look
+  related.
+- What does the `CR[set+0xCB0]` poll wait for?
+- Is `CR[0x40A8] = 1` (primary core) needed on a single-core GPU?
+- Which value is written to `BCAST[0x0408]`/`0x040C` and `CR[0x418]` (the free-list/ALIST
+  broadcast of phase E)?
+
+#### Q19 — TA completion
+
+- Events: completion is `TA_FINISHED` (bit 5, routed by `MTS_DM2`). Must the firmware also
+  handle `TA_TERMINATE` (bit 6), and when does it occur?
+- **Write-back:** after the TA, which PM registers are read back into the HWRTData
+  (`pm_alist_stack_pointer`, `pm_mlist_stack_pointer`, …) and into each
+  `rogue_fwif_freelist` (`current_stack_top`, `current_dev_addr`, `allocated_page_count`)?
+  How does `state` move (`GEOM_FINISHED`; first/last kick)?
+- **Cache flush:** the completion-flush table gives the geometry variant only partly
+  (`0x0688 = 1`, `0x0668 = 5`, SLC `DM_TA`). Please give the full ordered geometry
+  sequence, as for fragment and compute: steps 1–9, the `0x1608`/`0x1720` values, and the
+  MCU fence. Where does the "TPC flush" fit?
+- Is a PM "unload" or pause needed before the next TA of another HWRTData?
+
+### B. Fragment (3D) kick
+
+#### Q20 — Loading the HWRTData into the PM, fragment phase, and PM deallocation
+
+Phase A says "Load the HWRTData into the PM (fragment phase)", and "pause the PM
+deallocation" for a partial render.
+- Which registers and fields does the fragment-phase load write (MLIST, region headers,
+  macrotile array, free lists for deallocation)?
+- How is "pause the PM deallocation" done?
+- **After the 3D:** how are the PB pages returned to the free list? Is it automatic
+  (event `PM_3D_MEM_FREE`, bit 8), or does the firmware drive it? Which `rogue_fwif_freelist`
+  fields does the firmware update, and how does `state` move (`FRAG_FINISHED`)?
+
+#### Q21 — Sources of the 3D registers
+
+- **"Render target state":** where do `BCAST[0x3E40]`, `BCAST[0x0F18]`, `BCAST[0x0F28]`,
+  the ZS pair `BCAST[0x0FA8/0x0FAC]`, and the 64-bit `BCAST[0x0F20/0x0F24]` of phase B come
+  from? Fields of `rogue_fwif_hwrtdata(_common)` (for example `rgn_header_dev_addr` or
+  `macrotile_array_dev_addr` for `0x0F20`), or something else?
+- `BCAST[0x40A0]` (byte) = `cmd+0x7C`. That is `rogue_fwif_frag_regs.view_idx` (regs + 68).
+  Correct?
+- The remaining `rogue_fwif_frag_regs` fields the table does not place: `isp_bgobjdepth`,
+  `isp_bgobjvals`, `isp_aa`, `isp_ctl`, `tpu`, `pixel_phantom`, `isp_scissor_base`,
+  `isp_dbias_base`, `isp_oclqry_base`, `isp_zlsctl`, `isp_zload_store_base`,
+  `isp_stencil_load_store_base`, `tpu_border_colour_table`, `pds_bgnd[3]`, `pds_pr_bgnd[3]`,
+  `isp_dummy_stencil/depth_store_base`, `rgnhdr_single_rt_size`, `rgnhdr_scratch_offset`.
+  Which register receives each, and is any of them conditional?
+  - The phase-C `cmd+0x98…+0xA4` → `0x0FB0…0x0FBC` looks like `isp_zlsctl` and
+    `isp_zload_store_base`. Please confirm.
+- `rogue_fwif_cmd_frag.flags` (`DEPTHBUFFER`, `STENCILBUFFER`, `GET_VIS_RESULTS`,
+  `SCRATCHBUFFER`, `PREVENT_CDM_OVERLAP`…), `zls_stride`, `sls_stride`: what does each
+  change in the kick?
+- Phase F says a normal 3D kick writes `CR[0x0298] = 0` and `CR[0x01C8] = 0`. Where in
+  the sequence?
+
+#### Q22 — Combined geometry + fragment kick and interlocks
+
+- For KCCB `COMBINED_GEOM_FRAG_KICK` (117), and for separate kicks on one render context:
+  must the fragment wait for the TA of the same HWRTData to finish (state
+  `GEOM_FINISHED`)? Is that wait done through the cCCB fences, or by the firmware itself?
+- With DM overlap enabled (`INICFG_DISABLE_DM_OVERLAP` clear on this GPU), which DMs may
+  run at the same time (TA + 3D of different renders, 3D + compute)? What does
+  `ROGUE_FRAG_FLAGS_PREVENT_CDM_OVERLAP` enforce?
+
+### C. Parameter buffer exhaustion (SPM)
+
+#### Q23 — Out-of-memory, free-list grow, partial render, ZS backing
+
+`partial-render-spm.md` gives the protocol but no registers:
+- **Detecting OOM:** `PM_OUT_OF_MEMORY` (bit 7, `MTS_DM2`). How does the firmware tell
+  which free list (local or global) ran out, and read how many pages were used?
+- **Using the ready pages:** which PM registers are changed to hand `ready_pages` to the
+  TA, and how is the TA resumed (a register write, or a new kick)?
+- **Grow:** after KCCB `FREELIST_GROW_UPDATE` (`delta_pages`, `new_pages`, `ready_pages`),
+  which PM registers change before resuming?
+- **Partial render** (`FRAG_PR`): how does it differ from a normal 3D kick (`pds_pr_bgnd`,
+  `pr_buffer_fw_addr[]`, no ZS load/store)? How is the TA restarted afterwards, and which
+  HWRTData fields are updated (`HWRTDATA_PARTIAL_RENDERED`, state `PARTIALRENDERFINISHED`)?
+- **ZS backing:** when does the firmware send `ZSBUFFER_BACKING`, and what does it do on
+  `ZSBUFFER_BACKING_UPDATE`?
+- **Free-list reconstruction after HWR:** what does the firmware compute from
+  `freelist_hwr_snapshot[]` and send in `FREELISTS_RECONSTRUCTION`, and what does it do
+  on the reply?
+
+### D. Preemption
+
+#### Q24 — Context store and resume (CDM, TA, 3D)
+
+- **When** does the firmware decide to store a running context (priority of a newly
+  ready context, deadline, host request)?
+- **Store sequence per DM:**
+  - 3D: `BCAST[0x1000] = 1` while `(ISP_RENDER & 3) != 3`;
+  - CDM: through `CDM_CONTEXT_STORE_STATUS` `0x04A0` and the `cdm_terminate_pds`
+    programs?
+  - TA: through the VDM store tasks in `geom_registers_caswitch`?
+
+  Which event or poll says the store is complete? Where is the state saved
+  (`context_state_addr`, buffer A/B with `ROGUE_FWIF_CTX_USING_BUFFER_A/B`)?
+- **Resume sequence per DM:** for 3D the spec gives `CR[0x1020]`, `ISP_RENDER |= 0x10`,
+  then `CR[0x0298]`/`CR[0x01C8]`. Please give the CDM and TA equivalents and how
+  `fw_com_ctx_flags` (`NEED_RESUME`) is maintained.
+
+### E. Smaller items
+
+#### Q25 — Transfer cases that still fail
+
+These cases fail deterministically, and adding the full DM 3 flush before every TQ does
+not change them ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)):
+- `api.copy_and_blit.core.buffer_to_buffer_with_offset.*`: all 64, with off-by-one byte
+  values;
+- `image_to_image.simple_tests.partial_image_npot_*`;
+- `image_to_buffer…buffer_offset_relaxed_r8_unorm`, `whole_unaligned`;
+- `blit_image.simple_tests.mirror_subregions.*`.
+
+Does the firmware use any `rogue_fwif_cmd_transfer` field that ours ignores? Candidates:
+- `flags` bits other than `SINGLE_CORE`;
+- `isp_xtp_pipe_enable`;
+- the third PBE word per render target;
+- a different number of render targets.
+
+Or is a transfer kick fully described by the Q13 table, so that these failures come from
+the host side?
+
+#### Q26 — KCCB commands still treated as no-ops
+
+What must the firmware do for:
+- `NOTIFY_WRITE_OFFSET_UPDATE` (114): resume a context whose cCCB grew without a KICK?
+- `OS_ONLINE_STATE_CONFIGURE` (118);
+- `REGCONFIG` (200), `BP` (103, shader breakpoints);
+- `PHR_CFG` (213), `WDG_CFG` (215)?
+
+The mainline host may not send them today, but a complete firmware should handle them.
 
 ## Answered
 
