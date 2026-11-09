@@ -308,9 +308,11 @@ written and cleared within one sample, leaves no trace.
   - It counts back up as the fragment returns them: 4, `0xA`, `0x10`, `0x12`, `0x1F`.
   - It does not move while the global freelist is used.
 
-  `0x0224` (loaded stack top, context 0) stays `0x1F` throughout. At each new geometry load
-  `0x0348` returns to `0x1F` with no sampled register changing value in that sample, which
-  fits a rewrite of `0x0224` with the same value (`TO CONFIRM`). At one fragment load,
+  `0x0224` (loaded stack top, context 0) stays `0x1F` throughout. **Correction (Q16i):** after
+  the first load, `0x0348` does not get back to `0x1F` through a reload. The fragment returns
+  the local pages one by one, so it already reads `0x1F` when the next geometry load comes.
+  Only the first load of a boot shows a real copy (`0x0348` 0 → `0x1F`, in the same sample as
+  the `0x0224` write; see Q16i). At one fragment load,
   `0x0350` went `0x1F` → 0, matching the trace `FL-3D-Base … SP = 0`. The register that
   holds the loaded top for context 1 was not identified.
 - **`0x0250`/`0x0258`:** never seen non-zero in any sample. If they are written, they clear
@@ -424,6 +426,139 @@ So writing `+0x08` does not by itself update the live register; a later step doe
 - The `TAG_SB`/`TAG_ID` requester encoding of `BIF_FAULT_BANK*_REQ_STATUS` is not in the
   public sources (`pvr_rogue_cr_defs.h` gives only the field positions), and no fault with
   that tag was observed with the original firmware. The unit is not identified (`PENDING`).
+
+#### What happens around the live copy (answers Q16i, O)
+
+More `bigpb` runs on the open v1.1 image, each started right after a reboot so that the
+**first load of the boot** is captured. Register reads were done from the host only, in
+three forms:
+- a diff of every register in `0x0000–0x09FC`, `0x0C00–0x40FC` between the last idle read
+  and the first read after the load (one full read takes ~0.5 ms);
+- 5–37 µs sampling of 64-register blocks: `0x2000–0x20FC`, `0x0300–0x03FC`, and every
+  register outside the PM ranges that the diff showed changing;
+- 5–11 µs sampling of `0x20B8`/`0x20BC`/`0x20C0`/`0x20C8` with the public BIF, SLC, event
+  and multicore status registers.
+
+Not covered: `0x0A00–0x0BFF`, and offsets above `0x40FC` other than `0xF078–0xF338`. A
+write that does not change a value, or a pulse shorter than one sample, is invisible.
+
+**First load after boot, all ranges** (one sample ≈ 37 µs; time from the `0x20F8` change):
+
+| Time | Changes |
+|---|---|
+| −40 µs | `0x18C0`/`0x18C8`/`0x18D0` `0x7FFFFF` → `0x7FC000` |
+| 0 | `0x20F8` 0 → 1, together with `0x1498` → 1, `0x18E8` → `0xF`, `0x17B8` → `0xA`, `0x1500` → `0x80`, `0x1780` `0x40` → `0x21`, `0x1788` → `0x20`, `0x178C` → `0x20`, `0x0FA0` → `0x88`, `0x0C78` → `0x88` |
+| +37 µs | **`ROGUE_CR_BIF_CAT_BASE1` (`0x1208`) → the application's page catalogue, `ROGUE_CR_BIF_CAT_BASE_INDEX` (`0x1240`) → `0x1`**, and the local live `0x0348` 0 → `0x1F` |
+| +74 µs | global live `0x20C8` 0 → `0x1BF` |
+| +111 µs | `0x0CE0` → 1, `0x17A0`/`0x17A4` (TPU border), `0x0C80`/`0x0C88`, `0x3840` |
+| +172 µs | the geometry starts: `0x0420` → 1, `0x0408` (VDM stream base), `0x0D00` `0x3F` → `0x05`, `PM_CAT_BASE_VCE0` valid, `0x2000` 0 → 3, the unit clocks in `ROGUE_CR_CLK_STATUS` turn on |
+
+How to read this:
+- **`0x20F8` belongs to the GPU unit initialisation, not to the freelist load.** It changes
+  in the same sample as the unit defaults of [boot-gpu-init](boot-gpu-init.md) (`0x1498`,
+  `0x18E8`, `0x18C0…`, `0x17B8`).
+  - On the original, that initialisation runs at the first kick, not at module load. The
+    public trace shows the GPU being idled after boot (`GPU idle (might be powered
+    down)`), and `GPU Units init` printed again right before the first geometry load.
+  - Writing `0x20F8` at init time, as the spec's init table says, is therefore equivalent.
+  - `0x1500`, `0x1780`, `0x1788`, `0x178C` and `0x0FA0` also change in that sample and are
+    not in the init table (`TO CONFIRM` whether they belong to the initialisation or to the
+    kick).
+- **The memory context is bound no later than the local copy.** `CAT_BASE1` and
+  `CAT_BASE_INDEX` change in the **same** sample as `0x0348`, and before `0x20C8`. The public
+  trace gives the order at a first kick:
+  1. memory-context activation and register-set setup;
+  2. then the two `Load Freelist` lines;
+  3. then `CONTEXT_PB_BASE`.
+
+  Since a freelist base is a GPU virtual address in the application's memory context, an
+  implementation should bind `CAT_BASE{n}` and `CAT_BASE_INDEX` (`TA` field) **before** it
+  writes the PM freelist registers. `TO CONFIRM`: whether the live copy depends on it.
+- `ROGUE_CR_SOFT_RESET` (`0x0100`/`0x0104`) and `ROGUE_CR_CLK_CTRL` (`0x0000`/`0x0004`) did
+  not change during the load. In `ROGUE_CR_CLK_STATUS`, the PM clock (bit 4) still reads
+  gated when `0x20C8` is copied; it turns on later, with the geometry.
+- `ROGUE_CR_MULTICORE_GEOMETRY_CTRL_COMMON` (`0xF320`) stays **0** for the whole run
+  (`MULTICORE_FRAGMENT_CTRL_COMMON` = 1, `MULTICORE_COMPUTE_CTRL_COMMON` = `0x101`).
+
+**1. What changes with the late copies.** With 5 µs sampling of the geometry bank (136 bank
+updates in one run):
+- **The base (`+0x00`) always changes first**, then `+0x08`. The live `+0x10` takes the
+  `+0x08` value in the same sample as `+0x08` or one sample (5 µs) later.
+- When `+0x08` keeps its value, the live register still reloads to it in the same sample
+  as the base change or one sample later (91 + 34 cases).
+- With `0x02A0`/`0x02A8`, `0x12A0`, `0x3820`, `0x1350`, `0x1358`, `0x1330`, `0x1338`,
+  `0x0130`, `0x2000` and `0xF310–0xF330` sampled every ~11 µs, **none of them changed between
+  the `+0x08` write and the late live copy**. At the first load of that run the gap was 61 µs,
+  with no change in any of them.
+- At freelist updates the copy happens while `0x02A0` = 1 and `0x02A8` = 1; at the first load
+  there is no pause.
+
+The copy is visible only as the live value changing. No other state change goes with it in
+the ranges read.
+
+**2. `0x03D0`/`0x03D4` vs `0x0348`.**
+- In both first loads captured with these registers, `0x03D0`/`0x03D4` changed **before**
+  `0x0348` (13 µs and 90 µs earlier), never in the same sample.
+- `0x0224` changed in the same sample as `0x0348`.
+- After the first load the local live value is not reloaded (see the correction in Q16g),
+  so later loads give no further comparison.
+
+The order fits `0x03D0`/`0x03D4` being written before the freelist registers, not a status
+set after the copy, but the host cannot tell a write from a hardware update.
+
+**3. Invalidations and flushes.**
+- `ROGUE_CR_BIF_CTRL_INVAL` (`0x12A0`) was non-zero in **one** sample of a whole run, not
+  near any load.
+- `ROGUE_CR_SLC_STATUS0` (`0x3820`) showed `FLUSH_INVAL_PENDING` in 110 samples. None fell
+  between a `+0x08` write and its live copy.
+- `ROGUE_CR_BIFPM_STATUS_MMU` (`0x1350`, outstanding PM MMU requests) stayed 0 until
+  **after** the live copy. Its first non-zero values come when the PM starts taking pages.
+
+So the copy needs no PM memory access and no flush or invalidate visible at this
+resolution.
+
+**4. Trace at the first load of a boot** (public strings; `group id` from
+`pvr_rogue_fwif_sf.h`), in order, between the KCCB kick and `Kick TA`:
+
+| Trace line | Group, id |
+|---|---|
+| `cCCB Woff update = 200, DM = 2, …` | — |
+| `Ready-to-run debug OSid = 0, DM = 2, …`, `Client command header DM = 2, …` | — |
+| `PM running primary config (Core 0)` | PM 30 |
+| `GPU Units init (# mask: 0x1)` | MAIN 69 |
+| `Cancel power off request …` | POW 18 |
+| `Activate MemCtx=… DM=2 secure=0` | BIF 1 |
+| `Setup register set=-1 DM=2, PC address=…, NewPCRegRequired=1` | BIF 19 |
+| `Alloc PC set 0 as register range [1 - 1]` | BIF 20 |
+| `Grab reg set 0 refcount now 1` | BIF 4 |
+| `Load  Freelist … type: 0 … stacktop = 0x1f …` (local) | RTD 17 |
+| `Load  Freelist … type: 1 … stacktop = 0x1bf …` (global) | RTD 17 |
+| `CONTEXT_PB_BASE set to 0x3, FL different between TA/3D: local: 1, global: 1` | RTD 3 |
+| `TA RTData … loaded on HW context 0` | RTD 15 |
+| `TA Buffers: …`, `TE Region headers base … (RGNHDR Init: 1)` | RTD 25, RTD 24 |
+| `Is TA: 1, finished: 0 on HW 0 …` | PM 2 |
+| `UFL-TA-Base: … (SP = 447 …), FL-TA-Base: … (SP = 31 …)` | PM 4 |
+| `ALIST0 SP = 0, MLIST0 SP = 0 (VCE 0x0, TE 0x0, ALIST 0x0)` | — |
+| `Kick TA: … First kick:1 …` | MAIN 7 |
+
+`PM running primary config (Core %d)` is printed before **every** PM operation: here,
+before each OOM handling, and between `PM pause TA ALLOC` and `PM unpause TA ALLOC` at every
+freelist update. Its sibling is id 31, `PM running secondary config (Core %d)`. This points
+to a "select which PM configuration is being programmed" step before PM registers are
+touched. No register change goes with it in the ranges read (`PENDING`: it may be a write
+of an unchanged value, or a register in an unsampled range).
+
+**Summary for an implementation still stuck at live = 0:**
+1. Bind the memory context (`CAT_BASE{n}` = page catalogue, `CAT_BASE_INDEX`) before the PM
+   writes.
+2. Write `0x03D0`/`0x03D4` before the local freelist.
+3. Write each bank **base first, then `+0x08`**. Write the local base and `0x0224`.
+4. Then look for the copy within ~60 µs.
+
+If it still does not copy, the remaining unobserved candidates are:
+- the "PM configuration select" step behind trace PM 30;
+- the `0x0A00–0x0BFF` range;
+- writes of unchanged values.
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
