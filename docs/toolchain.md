@@ -30,7 +30,7 @@ Outputs in `build/`, which git ignores:
 | `rogue_36.29.52.182_v1.fw` | the container the kernel loads |
 
 The build is deterministic: the same sources give the same `.fw` byte for byte. The
-default build (no `EXP`) of the current sources has sha256 `6a33a086…`, and that is the
+default build (no `EXP`) of the current sources has sha256 `c86de988…`, and that is the
 build installed on the board.
 
 ## Compiler flags
@@ -87,6 +87,7 @@ Compile-time knobs (`make -B EXP="-DNAME[=value]"`):
 | `EXP_SLC_ONLY_FLUSH` | completion flush = SLC only, instead of the per-DM sequence (E023 control) |
 | `EXP_TA` | enable the experimental geometry kick (`geom.c`, E028) |
 | `EXP_DUMP_RENDER` | dump the host render structures of `GEOM`/`FRAG` commands to the debug trace (E027) |
+| `EXP_GLOBAL_FL` | with `EXP_TA`: write the global free list to the 0x2000-block candidates (E029, no effect) |
 | `EXP_CANARY` | with `EXP_TA`: write canary VAs to unassigned address registers (E028) |
 | `EXP_MLIST_REG`, `EXP_VDM_STATE_REG`, `EXP_TA_STATE_REG` | override the guessed register offsets used by `geom.c` (0 = do not write) |
 | `EXP_WATCHDOG_MS=<ms>` | force a short HWR watchdog, to exercise the overrun path (E025) |

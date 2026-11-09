@@ -28,7 +28,31 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16b — PM free-list registers (blocking: the TA runs but gets no pages)
+#### Q16e — The PM still allocates nothing (blocking)
+
+With the Q16b/Q16c answers applied ([E029](logRefs/E029-ta-pm-registers-from-answers.md)),
+the geometry runs (`PERF_TA_CYCLE` counts; `0x0420` counts the kick; `0x0D00` goes
+`0x3F` → `0x0F`). It still stops after the first 64 bytes of the control stream: local
+stack top stays `0x1F`, ALIST/MLIST stay 0. Programmed for PM context 0:
+- `0x0210` local base, `0x0224` stack top, `0x0398`/`0x039C` counts;
+- `0x0248` VHeap, `0x02D8` MLIST base;
+- `PM_CAT_BASE_*0` = 0 (first kick), handshakes `0x0250`/`0x0258`;
+- `0x0CB0` TA state base, constants of Q16c.
+
+Questions:
+1. **Global free list:** which registers hold its base, stack top, total and counts for
+   PM context 0? The 0x2000 block (`0x2078` + `0x2090/0x2094`) was tried with no effect.
+   The answer said they are outside `0x0200–0x043F`. Could the dirty team sample
+   `0x0440–0x0800` and `0x2000–0x2200` the same way?
+2. **PM start:** must the firmware write `PM_PAGE_MANAGEOP` (`0x02A0`) or another register
+   to start or unpause allocation for a first kick? (It reads 0 during our stalled job.)
+3. **What does `0x0D00 = 0x0F` mean** (bits 4 and 5 clear while the TA runs)? Which units
+   are those?
+4. Is anything else written between the PM handshakes and the VDM trigger that the
+   register sampling cannot show, for example a write that self-clears? A write-ordered
+   list for one first kick would settle this, even without field names.
+
+#### Q16b — PM free-list registers (answered in part; see Q16e)
 
 With the TA kick of [E028](logRefs/E028-ta-kick-bringup.md), geometry starts: the TA
 cycle counter runs and the VDM fetches its first 64 bytes. The PM then hands out no page:

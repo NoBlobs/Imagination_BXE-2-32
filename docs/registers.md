@@ -70,7 +70,13 @@ The firmware reaches registers in three ways:
 | `0x0418` | O, E | `VDM_CALL_STACK_POINTER` ← geometry context state `+8` (call stack init) | value match |
 | `0x0428` | E | candidate `VDM_CONTEXT_STATE_BASE` | guess (E008 mask) |
 | `0x0210` / `0x0218` | S, O | local free list address (one per PM context) | spec observation |
-| `0x0220` / `0x0224` | O, E | low 22 bits: total pages (guess); high: free-list stack top | partly confirmed |
+| `0x0220` / `0x0224` | O | `0x0220` reads 0 with the original firmware; `0x0224` = local free-list stack top | spec observation |
+| `0x0398` / `0x039C` | O | local free list allocated page count / allocated MMU page count | spec observation |
+| `0x02A0` | O | `PM_PAGE_MANAGEOP`: 1 pauses TA allocation while the PM state changes | spec observation (trace) |
+| `0x02D8` / `0x02E0` | O, E | MLIST base (`pm_mlist_dev_addr`) of PM context 0 / 1 | spec observation + E028 guess |
+| `0x0420` | O, E | geometry kick counter (+1 per kick) | spec + E029 |
+| `0x0C30/0x0C34`, `0x0C48`, `0x0C70`, `0x0C90/0x0C94`, `0x0CA0` | O | constants `2/3`, `8`, `3`, `0x3089705F` ×2, `0x10` | spec observation |
+| `0x0D00` | O, E | status: `0x3F` idle, `0x0F` while our stalled TA runs | observed |
 | `0x0248` | O | `PM_VHEAP_TABLE` ← `vheap_table_dev_addr` | spec observation |
 | `0x0250` / `0x0258` | S | PM handshakes | spec |
 | `0x0270`/`0x0278`/`0x0280`, `0x02C0`/`0x02C8`/`0x02D0` | O, E | ALIST / MLIST stack pointers (`0x0278`/`0x02C8` writable) | partly |

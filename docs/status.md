@@ -63,6 +63,7 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E029 | the Q16b/Q16c answers applied to the TA; the PM still allocates nothing (Q16e) |
 | E027 | host render structures matched by value to the observed geometry registers |
 | E028 | first TA kick: `0x0CB0` = TA context-state base (canary method); the geometry pipe starts, but the PM hands out no pages |
 | E026 | `SLCFLUSHINVAL` flushes the SLC; `copy_and_blit` mostly passes (the failures are draws, or offset/NPOT/mirror cases unaffected by extra flushes); stability run to be repeated |
@@ -70,8 +71,8 @@ Mesa `pvr`.
 
 ## Next steps
 
-1. Answers to Q16b–Q16d (PM free-list registers, unmatched geometry registers, context
-   state) and the rest of Q19–Q21/Q23/Q24. Then finish the TA kick (`-DEXP_TA`), write
+1. Answer to Q16e (global free list registers, PM start, a write-ordered first kick),
+   then the rest of Q19–Q21/Q23/Q24. Then finish the TA kick (`-DEXP_TA`), write
    the 3D kick, and run `dEQP-VK.draw.*`.
 2. Repeat the stability run (`tools/stab-run.sh`).
 3. Look closer at `buffer_to_buffer_with_offset` (host side, per the Q25 answer).

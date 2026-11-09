@@ -96,8 +96,8 @@ static void geom_snapshot(uint32_t tag)
 {
 	TRACE(SFID_DBG_2, 0xE0280000u | tag);
 	TRACE(SFID_DBG_9, cr_read32(CR_PM_FL_STACKTOP), cr_read32(CR_PM_ALIST_SP),
-	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x0C30),
-	      cr_read32(0x0C48), cr_read32(CR_EVENT_STATUS), cr_read32(CR_GEOM_CTX_ENABLE));
+	      cr_read32(CR_PM_MLIST_SP), cr_read32(0x0410), cr_read32(0x02A0),
+	      cr_read32(0x0398), cr_read32(CR_EVENT_STATUS), cr_read32(CR_GEOM_CTX_ENABLE));
 }
 
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
@@ -124,9 +124,28 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	/* B. load the HWRTData into PM context 0 (partly known, see header) */
 	cr_write64(CR_PM_VHEAP_TABLE, rd64(hwrt, HWRT_VHEAP_TABLE));
 	cr_write64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));
-	/* 0x0220: two 22-bit fields (E008): low = total pages (E028 guess), high = stack top */
-	cr_write32(CR_PM_FL_STACKTOP - 4, rd32(fl_local, 28));      /* current_pages */
+	/* 0x0220 reads 0 with the original firmware (Q16b answer): leave it 0 */
+	cr_write32(CR_PM_FL_STACKTOP - 4, 0);
 	cr_write32(CR_PM_FL_STACKTOP, rd32(fl_local, FL_STACK_TOP));
+#ifdef EXP_GLOBAL_FL
+	{
+		/*
+		 * E029: global free list candidates in the 0x2000 block, which repeats
+		 * the PM register shapes of E008 (40-bit addresses next to two-22-bit
+		 * fields like 0x0220/0x0398).
+		 */
+		const uint8_t *fl_global = fwptr(rd32(hwrt, HWRT_FREELISTS + 4));
+
+		if (fl_global) {
+			cr_write64(0x2078, rd64(fl_global, FL_CURRENT_DEV_ADDR));
+			cr_write32(0x2094, rd32(fl_global, FL_STACK_TOP));
+			cr_write32(0x2090, 0);
+		}
+	}
+#endif
+	/* allocated page / MMU page counts of the local free list (Q16b answer) */
+	cr_write32(0x0398, rd32(fl_local, 32));
+	cr_write32(0x039C, rd32(fl_local, 36));
 	cr_write64(CR_BIF_PM_CAT_BASE_VCE0, rd64(hwrt, HWRT_VCE_CAT_BASE));
 	cr_write64(CR_BIF_PM_CAT_BASE_TE0, rd64(hwrt, HWRT_TE_CAT_BASE));
 	cr_write64(CR_BIF_PM_CAT_BASE_ALIST0, rd64(hwrt, HWRT_ALIST_CAT_BASE));
