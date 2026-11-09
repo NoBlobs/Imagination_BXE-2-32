@@ -86,7 +86,7 @@ and [kick-compute-and-3d](kick-compute-and-3d.md).
 | (no public name: power request) | `0x0038` | b0 `1` = on / `0` = off, b1 request |
 | (no public name: active dusts) | `0x0050` | `(1 << n) − 1` |
 | (no public name: pending XPU events) | `0x08F0` | multicore: events to process |
-| (no public name: CDM run / stream base) | `0x0478` / `0x0480` | CDM kick (also used for the firmware's own compute jobs, e.g. local memory clear) |
+| (no public name: CDM run / stream base) | `0x0478` / `0x0480` | CDM kick (also used for the firmware's own compute job, the `rf_cmd_addr` job) |
 | (no public name: PM page manage op / ack) | `0x02A0` / `0x02A8` | the trace calls it `PM_PAGE_MANAGEOP` / its ack |
 | (no public name: power monitor) | `0x17B0`, `0x6300`/`0x6330` | per-core energy counter |
 | (no public name: GPIO) | `0x0150` / `0x0158` / `0x0B90` | GPIO input / ack / event re-arm (see [observed-sequences](observed-sequences.md)) |

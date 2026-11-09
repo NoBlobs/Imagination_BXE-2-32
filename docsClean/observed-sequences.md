@@ -52,7 +52,6 @@ Happens when a higher-priority context waits behind a lower-priority one on a DM
 "Higher priority context scheduled for DM 4 …"              // CSW id 18/34/38
 "*** CDM FWCtx store start"                                  // CSW id 5
 "Multicore context store on DM4 active core mask 0x0001"     // CSW id 49
-(local memory cleared after the store)
 ... the higher-priority job runs and finishes ...
 "Multicore context resume on DM4 active core mask 0x0001"    // CSW id 48
 "CDM FWCtx shared alloc size load 0x1"                       // CSW id 3

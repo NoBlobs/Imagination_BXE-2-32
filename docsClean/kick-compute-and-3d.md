@@ -24,8 +24,9 @@ blocks are prepared by the host) and from the context.
 
 ### A. Preconditions
 
-- Power domain **on**. If the configuration requires it, the USC local memory is cleared
-  first (a compute job run by the firmware itself).
+- Power domain **on**. On the first kick after a GPU-units initialisation, the
+  `rf_cmd_addr` job runs first if it is non-zero (see "Pre-kick firmware job" in the
+  transfer kick; a no-op on mainline).
 - **Multicore control**: read `ROGUE_CR_MULTICORE_SYSTEM` (`0xF308`) and write
   `BCAST[ROGUE_CR_MULTICORE_COMPUTE_CTRL_COMMON]` (`0xF330`).
 - **Memory context** bound to a BIF slot (DM 4). Whether compute may overlap other DMs is
@@ -96,7 +97,7 @@ The kick with the **most registers** (ISP, ZS and output configuration).
 ### A. Preconditions
 
 - `BCAST[ROGUE_CR_MULTICORE_FRAGMENT_CTRL_COMMON]` (`0xF310`) = control value.
-- Power domain on (and local memory cleared, if configured).
+- Power domain on (and the `rf_cmd_addr` job on the first kick after a units init, as above).
 - For a **partial render** with a pending deallocation, **pause the PM deallocation**
   first.
 - **Memory context** bound to a BIF slot (DM 3).
@@ -137,22 +138,29 @@ Trace MAIN id 120: `Kick 3D: FWCtx … @ …, RTD …, Partial render:…, CSW r
 …)`. Read `ROGUE_CR_TIMER`, arm the watchdog and record the execution state of DM 3. PM 3D
 timeouts are in [observed-sequences](observed-sequences.md).
 
-### F. Trigger (two writes — corrects Q5/Q8)
+### F. Trigger
 
-The pixel pipeline needs **two** final writes, in order (**D**/**O**):
+- **`BCAST[0x0F00] = 1`** (no public name) **launches the pixel pipeline.** It is the last
+  write of the kick and is issued unconditionally (**D**/**O**).
+- In a normal (non-resumed) 3D kick, `ROGUE_CR_ISP_RENDER` is written **only** by the phase D
+  pipe reset (`= 0`). Nothing else writes it before the launch.
+- **`ROGUE_CR_ISP_RENDER |= 0x10` is part of resuming a stored context, not of the launch.**
+  It is done only when the context's `fw_com_ctx_flags` has
+  `ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME` set. In that case the firmware first reloads the
+  per-core state saved by the context store into `CR[0x1020]` of each core (from the
+  context's `context_state_addr` buffer), then sets bit 4, and then reloads `CR[0x0298]`
+  and `CR[0x01C8]` from the same buffer. A normal kick writes `CR[0x0298] = 0` and
+  `CR[0x01C8] = 0` instead.
+- `(ROGUE_CR_ISP_RENDER & 3)` is **not** a kick precondition. It is tested when the firmware
+  decides whether to **request a 3D context store**: a store is requested (by writing
+  `BCAST[0x1000] = 1`) only while `(ROGUE_CR_ISP_RENDER & 3) != 3`.
 
-1. `BCAST[ROGUE_CR_ISP_RENDER] = ROGUE_CR_ISP_RENDER | 0x10` — read-modify-write, set bit 4.
-   The readiness precondition checked earlier is `(ROGUE_CR_ISP_RENDER & 3) == 3`. (A
-   context **store** uses `ROGUE_CR_ISP_RENDER` the other way — a stop request — not `| 0x10`.)
-2. **`BCAST[0x0F00] = 1`** (no public name) — this is the actual **pixel-pipe launch**, the
-   true last write. On multicore it is issued once the fragment core mask covers all cores;
-   single-core it is always issued.
-
-> **This answers Q8.** Setting `ISP_RENDER` to `0x13` (host
-> `isp_render 0x3` then `| 0x10`) is **not** enough: without the following
-> `BCAST[0x0F00] = 1`, the pipe never starts, `PERF_3D_CYCLE` stays 0 and no
-> `PIXELBE_END_RENDER` arrives — exactly the reported symptom. The reset write
-> `ROGUE_CR_ISP_RENDER = 0` in phase D is not a trigger.
+> **Correction (Q14).** Earlier versions of this phase described the trigger as
+> "`ISP_RENDER |= 0x10`, then `0x0F00 = 1`", with an `(ISP_RENDER & 3) == 3` readiness check
+> and, on multicore, a condition on the launch. Re-checked against the open variant: the
+> launch is `0x0F00 = 1` alone, `| 0x10` belongs to the resume path, and the `& 3` test
+> belongs to the context-store request. The point of the Q8 answer still holds: without
+> `0x0F00 = 1` the pipe never starts.
 
 ---
 
@@ -181,19 +189,18 @@ All writes go through the broadcast bank. Unless stated, a value is the host's
 
 > **Provenance.** Registers, values and conditions: **D**. Field roles: **P** (public
 > header, and public Mesa: `csbgen/rogue/cr.xml`, `include/hwdef/rogue_hw_defs.h`,
-> `vulkan/pvr_arch_job_transfer.c`). Field names marked `TO CONFIRM` are inferred from the
-> position of the value in the public layout and were not checked independently.
+> `vulkan/pvr_arch_job_transfer.c`). Field names are matched by their offsets in the public
+> `rogue_fwif_transfer_regs` layout.
 
 | Register | Value | Written when |
 |---|---|---|
-| `ROGUE_CR_MULTICORE_FRAGMENT_CTRL_COMMON` | control value | always |
-| `0x0F88` | `isp_bgobjvals` (`TO CONFIRM`) | always |
+| `ROGUE_CR_MULTICORE_FRAGMENT_CTRL_COMMON` | `1` on a single-core GPU (this SoC), or when `flags` has `ROGUE_TRANSFER_FLAGS_SINGLE_CORE`; otherwise `((1 << cores) − 1) \| 0x100` | always |
+| `0x0F88` | `isp_bgobjvals` | always |
 | `0x06A0`/`0x06A4` | `pds_bgnd0_base` (64-bit) | always |
 | `0x06A8`/`0x06AC` | `pds_bgnd1_base` (64-bit) | always |
 | `0x06B8`/`0x06BC` | `pds_bgnd3_sizeinfo` (64-bit) | always |
-| `ROGUE_CR_ISP_RENDER` | `isp_render` | always (see ordering) |
 | `0x0F20`/`0x0F24` | `isp_mtile_base` (64-bit) | only if `(isp_render & 3) == 2` |
-| `0x0F28` | `isp_rgn` (`TO CONFIRM`) | only if `(isp_render & 3) == 2` |
+| `0x0F28` | `isp_rgn` | only if `(isp_render & 3) == 2` |
 | `0x0FC8` / `0x0FCC` | `0` / `0xE4` | only if `(isp_render & 3) == 2` |
 | `0x4070` | `usc_pixel_output_ctrl` | always |
 | `0x4078`, `0x4080`, `0x4088`, `0x4090` | `usc_clear_register0..3` | always |
@@ -202,7 +209,7 @@ All writes go through the broadcast bank. Unless stated, a value is the host's
 | `0x0F10` | `isp_render_origin` | always |
 | `0x0FD8` | tiles in flight = `min(((isp_ctl >> 12) & 0xF) + 1, 2)` | always |
 | `ROGUE_CR_ISP_CTL` | `isp_ctl` | always |
-| `0x0F30` | `isp_aa` (`TO CONFIRM`) | always |
+| `0x0F30` | `isp_aa` | always |
 | `0x0FA8` / `0x0FAC` | `0x88888888` / `0x88888888` | only if `(value written to 0x0F30) & 3 != 0` |
 | `0x0F48` / `0x0F4C` | `0` / `0` | always |
 | `0x0628` | `event_pixel_pds_info` | always |
@@ -210,6 +217,9 @@ All writes go through the broadcast bank. Unless stated, a value is the host's
 | `0x0620` | `event_pixel_pds_data` | always |
 | `0x1510 + 8·n` / `0x1550 + 8·n` | `pbe_wordx_mrty[2n]` / `pbe_wordx_mrty[2n+1]` | per render target *n* |
 | `0x0388` | `0` (no public name; role unknown) | always |
+| `CR[0x1020]` of each core, then `ROGUE_CR_ISP_RENDER \|= 0x10` | per-core state saved by the context store, from `context_state_addr` | only when resuming (`fw_com_ctx_flags` has `ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME`) |
+| `ROGUE_CR_ISP_RENDER` | `isp_render` | always, immediately before the launch |
+| `0x0F00` | `1` (pixel-pipe launch) | always, last write |
 
 A register listed with a condition is **not written** when the condition is false. This
 analysis does not establish what happens if such a register is written anyway.
@@ -218,13 +228,23 @@ analysis does not establish what happens if such a register is written anyway.
 
 - the DM 3 memory-context activation comes first, and if it fails nothing in the table is
   written and the kick is skipped;
-- the last two writes are `ROGUE_CR_ISP_RENDER |= 0x10` and then `0x0F00 = 1` (see 3D
-  phase F).
+- the last two writes are `ROGUE_CR_ISP_RENDER = isp_render` and then `0x0F00 = 1`.
 
-Everything else in the table may be written in any order. The analysed firmware writes
-`ROGUE_CR_ISP_RENDER = isp_render` once before the other configuration registers and then
-does the `| 0x10` at launch. Whether that early write is required has **not** been
-established.
+Everything else in the table may be written in any order. After the launch, the firmware
+records the kick time and requests a BG pass (`ROGUE_CR_MTS_SCHEDULE = 0`).
+
+> **Correction (Q14).** Earlier versions of this section placed the `isp_render` write
+> before the configuration registers and launched with `ISP_RENDER |= 0x10`. Re-checked
+> against the open variant (the target): `ISP_RENDER = isp_render` is written just before
+> `0x0F00 = 1`, and `| 0x10` is done only when resuming, as in the 3D kick (phase F).
+
+**Pre-kick firmware job.** After every GPU-units initialisation (cold boot, warm boot, HWR
+re-init), the first kick on any DM (geometry, fragment, transfer or compute) checks the
+context's `rf_cmd_addr`. If it is
+non-zero, the firmware first runs a compute job from that address on DM 4, waits for
+`COMPUTE_FINISHED` and flushes the compute caches. If that job fails, the kick is skipped.
+The mainline host never sets `rf_cmd_addr`, so on mainline nothing runs and the kick
+proceeds.
 
 #### Output / PBE state
 
@@ -301,10 +321,70 @@ same event as a normal 3D render. `0x06B0` is **not** written by the transfer ki
 
 ---
 
+## Completion: per-job cache flush (answers Q14)
+
+When a fragment, transfer or compute job finishes, the firmware **flushes the caches of that
+DM's pipeline before it retires the command**. Retiring is the step that applies the fence
+updates the host waits on. So the host never sees a job as finished before its output has
+been written back (**D**).
+
+The order on completion is:
+
+1. clear the completion event in `ROGUE_CR_EVENT_CLEAR` (`PIXELBE_END_RENDER` for 3D and TQ,
+   `COMPUTE_FINISHED` for compute);
+2. run the flush sequence below;
+3. retire the command (fence updates, then the IRQ to the host).
+
+The flush depends on the context's DM (`rogue_fwif_fwcommoncontext.dm`). Transfer contexts
+use `PVR_FWIF_DM_FRAG`, so a TQ_3D gets the fragment variant. All writes are broadcast.
+"Poll" means: wait on every enabled core until the written bit clears.
+
+| Step | Fragment / transfer (`dm` = FRAG) | Compute (`dm` = CDM) |
+|---|---|---|
+| 1 | `0x4000 = 1` | `0x4000 = 1` |
+| 2 | `0x0688 = 2`, poll bit 1 | `0x0688 = 4`, poll |
+| 3 | `0x0668 = 3`, poll bit 0 | `0x0668 = 9`, poll bit 0 |
+| 4 | `0x1608 = 0x38001`, poll bit 0 | `0x1608 = 0x10001`, poll bit 0 |
+| 5 | `0x1480 = 1`, `0x1488 = 1` | `0x1488 = 1` |
+| 6 | `ROGUE_CR_MCU_FENCE = 0x00000180_00000000` (`DM` field = `DM_PIXEL`) | `ROGUE_CR_MCU_FENCE = 0x00000280_00000000` (`DM` field = `DM_COMPUTE`) |
+| 7 | `0x1720 = 0x2B`, poll `0x1728` bit 0 | `0x1720 = 0x33`, poll `0x1728` bit 0 |
+| 8 | write barrier (see [execution-environment](execution-environment.md)) | — |
+| 9 | `ROGUE_CR_SLC_CTRL_FLUSH_INVAL = 6` (`DM_TA \| DM_PIXEL`), poll `ROGUE_CR_SLC_STATUS0` bit 2 | `ROGUE_CR_SLC_CTRL_FLUSH_INVAL = 8` (`DM_COMPUTE`), poll `ROGUE_CR_SLC_STATUS0` bit 2 |
+
+None of `0x4000`, `0x0688`, `0x0668`, `0x1608`, `0x1480`, `0x1488`, `0x1720`, `0x1728` has a
+public name. They are steps of the front-end, USC/PDS, TPU and MCU cache flush that precedes
+the SLC flush. Their individual roles are inferred, not established. A geometry variant
+exists as well (`0x0688 = 1`, `0x0668 = 5`, SLC `DM_TA`).
+
+**Answers to the three Q14 questions:**
+
+1. **Nothing per kick is needed before the first tile can emit.** The transfer kick does
+   **not** do the 3D phase D pipe-reset writes (`ISP_RENDER = 0`, `0x0618 = 0x80`,
+   `0x0F10 = 0`); those belong to the 3D kick only. No USC/PDS flush happens at kick time.
+   The only firmware action before a kick is the `rf_cmd_addr` job after a units
+   initialisation, which does nothing on mainline.
+2. **DM 3 state between jobs.** The firmware carries no pixel-pipeline state from one job to
+   the next, except the context-switch state of a context being resumed. It relies on every
+   job flushing its DM's caches at completion, as above. A compute job that ran just before
+   is flushed by the compute variant when it completes, before it is retired.
+3. **Yes, there is a firmware action at the end of a TQ that comes before the SLC flush.** It
+   is steps 1–8 of the fragment variant above, which run before step 9 (the SLC flush) and
+   before the command is retired. An SLC flush alone (step 9) is not the whole sequence.
+
+> **Status.** That this flush is what the first tile of a multi-tile transfer is missing is
+> **consistent with the observations but not proven**. The symptoms that fit are a lost
+> output that varies from run to run, with neither an SLC flush nor a delay after
+> `PIXELBE_END_RENDER` fixing it. The analysis shows that the firmware always runs this
+> sequence before retiring a fragment or transfer job. It does not show which step a
+> missing first tile depends on.
+
+---
+
 ## Common skeleton (TA, 3D, TQ, CDM)
 
 ```
-make sure the power domain is on (and clear local memory, if configured)
+make sure the power domain is on
+[first kick after a units init] run the rf_cmd_addr job if non-zero (no-op on mainline)
 multicore control (BCAST …_CTRL_COMMON)
 bind the memory context to a BIF slot               ── before any register-set write
 [TA/3D] load the HWRTData into the PM (+ poll handshakes)
@@ -315,7 +395,11 @@ record the DM's execution state
 TRIGGER (last write):
   - TA:     CR[set+0x400] = 1
   - CDM:    BCAST[0x0478] = 1
-  - 3D/TQ:  BCAST[ROGUE_CR_ISP_RENDER] |= 0x10 ; then BCAST[0x0F00] = 1  (0x0F00 is the launch)
+  - 3D:     BCAST[0x0F00] = 1                       (ISP_RENDER left at 0 from phase D)
+  - TQ:     BCAST[ROGUE_CR_ISP_RENDER] = isp_render ; then BCAST[0x0F00] = 1
+  - [resume only, 3D/TQ] ISP_RENDER |= 0x10 after reloading the saved per-core state
+ON COMPLETION:
+  clear the completion event → per-DM cache flush (see "Completion") → retire the command
 ```
 
 ## Compute: one kick per command, zero workgroups (answers Q10)
@@ -336,7 +420,7 @@ terminated) rather than at the kick path.
 
 - **High confidence:** the phases and dependencies, the named registers
   (`ROGUE_CR_CDM_*`, `ROGUE_CR_ISP_RENDER`/`ISP_CTL`, `ROGUE_CR_MULTICORE_*_CTRL_COMMON`),
-  the broadcast offsets, and the trigger sequence (3D/TQ: `ISP_RENDER |= 0x10` then
-  `0x0F00 = 1`; CDM: `0x0478 = 1`).
+  the broadcast offsets, and the triggers (3D: `0x0F00 = 1`; TQ: `ISP_RENDER = isp_render`
+  then `0x0F00 = 1`; CDM: `0x0478 = 1`; `ISP_RENDER |= 0x10` only when resuming).
 - **`PENDING`:** the field name of each remaining `cmd+0xNN` (read the public header and
   its check file).

@@ -71,6 +71,9 @@ The GPU signals completion in `ROGUE_CR_EVENT_STATUS` (HW2, IRQ task). The firmw
 the completion of the corresponding DM:
 
 - updates the HWRTData and freelist state (geometry), flushes the TPC, etc.;
+- **flushes the DM's caches** (front-end, USC/PDS, TPU, MCU fence, then SLC) **before**
+  retiring, so the host never sees the job done before its output is written back (see
+  "Completion: per-job cache flush" in [kick-compute-and-3d](kick-compute-and-3d.md));
 - retires the command from the cCCB and processes the updates (see
   [client-ccb](client-ccb.md));
 - re-evaluates scheduling for the DM, to see whether more work is ready.

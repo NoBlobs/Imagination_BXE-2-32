@@ -33,8 +33,9 @@ The phases below have a **mandatory order**: each depends on the previous one.
 ### A. Preconditions
 
 - The power domain must be **on** (wake the GPU if needed).
-- If the configuration requires it, the USC local memory is cleared first (a small
-  compute job run by the firmware itself).
+- On the first kick after a GPU-units initialisation, if the context's `rf_cmd_addr` is
+  non-zero, the firmware first runs a compute job from it (see the transfer kick in
+  [kick-compute-and-3d](kick-compute-and-3d.md)). The mainline host leaves it 0.
 - The **memory context** is bound to a `ROGUE_CR_BIF_CAT_BASE` slot (1–7), which selects
   the **register set** to use. Trace: BIF id 14, `Activate MemCtx=… DM=… secure=…`. Must
   happen before any write to the register set.
