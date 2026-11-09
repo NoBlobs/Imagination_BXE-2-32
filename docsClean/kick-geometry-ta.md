@@ -149,7 +149,7 @@ The trace lines used are `UFL-TA-Base`/`UFL-3D-Base`, `Freelist update completed
 | Bank offset | PM ctx 0 (geometry) | PM ctx 1 (fragment) | Holds | Evidence |
 |---|---|---|---|---|
 | `+0x00`/`+0x04` | `0x20B8`/`0x20BC` | `0x2078`/`0x207C` | **global freelist base** (64-bit) | equals the trace base |
-| `+0x08` | `0x20C0` | `0x2080` | **stack pointer to load** | written at every load and freelist update; the live `+0x10` takes the same value in the same sample (Q16g) |
+| `+0x08` | `0x20C0` | `0x2080` | **stack pointer to load** | written at every load and freelist update; the live `+0x10` takes the same value within ≤ 13 µs (Q16g, Q16h) |
 | `+0x10` | `0x20C8` | `0x2088` | **live stack pointer** (the trace `SP = …`), maintained by the PM, not writable | see the identity below; `0xFFFF` = 65535 with all 65536 pages free, `9` at the partial render where the trace prints `SP = 9` |
 | `+0x18` | `0x20D0` | `0x2090` | PB page count at the last freelist update/store | equals the trace "4PB" at those points (11212 at a grow update), then holds its value |
 | `+0x1C` | `0x20D4` | `0x2094` | MMU page count at the same points | equals the trace "4PT" (19, 26, 124…) |
@@ -296,7 +296,9 @@ written and cleared within one sample, leaves no trace.
   - a grow/ready-pages update: `0x02A0` 0 → 1, then the base, `+0x08` and the live `+0x10`
     change together (`0x20C8` 7 → `0x47`), then `0x02A0` 1 → 0.
 
-  The live register is read-only (as the E031 probe found). It is set by writing `+0x08`.
+  The live register is read-only (writes to it have no effect). It takes the `+0x08` value
+  shortly after `+0x08` is written. Q16h shows that this copy is a separate step and needs
+  PM state that is set on the first load.
   The bank of **PM context 0 is at `0x20B8`**, not `0x2078`. `0x2078`/`0x2080`/`0x2088` are
   the fragment-side bank.
 - **Local freelist:** the live stack pointer is **`0x0348` (PM context 0)** and **`0x0350`
@@ -343,8 +345,85 @@ So, just before the geometry starts:
 - `0x0348` equals the local top (`0x1F`);
 - `PM_CAT_BASE_VCE0` is 0.
 
-The live global value comes from the `+0x08` write. The write that sets the live local value
-is `TO CONFIRM` (most likely `0x0224`).
+The live global value is the `+0x08` value and the live local value the `0x0224` value; the
+step that copies them is examined in Q16h.
+
+#### PM state set on the first load after boot (answers Q16h, O)
+
+Three `bigpb` runs on the open v1.1 image after fresh reboots, with register reads from the
+host only:
+- a full read of `0x0200–0x03FC`, `0x2000–0x20FC` and `0x1200–0x12FC` after GPU init (module
+  loaded, GPU powered, no job yet), and again after the job;
+- tight sampling of the **first** geometry load after boot, every ~12 µs;
+- tight sampling (~6 µs) of `0x20C0`, `0x20C8`, `0x0250`, `0x0258`, `0x0224` and `0x0348`
+  over a whole run.
+
+**1. After GPU init, before any job.** Every register in `0x0200–0x03FC` and `0x2000–0x20FC`
+reads 0, except:
+
+| Register | Value after init |
+|---|---|
+| `0x0358` | `0x5` |
+| `0x0388` | `0x1` |
+| `0x03C0`, `0x03C8` | `0x7F` |
+| `0x03E0` | `0x1` |
+| `0x03F8` | `0xFF` |
+
+They keep these values after the job. The host cannot tell whether they are reset defaults
+or values the firmware writes at init. An implementation can compare them with its own idle read.
+
+**The first geometry load after boot** changed values in this order (samples ~12 µs apart;
+order of changes, not a list of writes):
+
+| Sample | Change | Note |
+|---|---|---|
+| 0 | **`0x20F8` 0 → 1** | changes **only here**; stays 1 for the rest of the boot (also 1 after the job) |
+| +56 µs | `0x0240/0x0244` 0 → `0x80_0000_0000` | |
+| +69 µs | **`0x03D0` 0 → `0x100`, `0x03D4` 0 → `0x1`** | |
+| +82 µs | `0x0210` → local base, `0x0224` 0 → `0x1F`, **live `0x0348` 0 → `0x1F`** | same sample |
+| +93 µs | `0x20C0` 0 → `0x1BF`, **live `0x20C8` 0 → `0x1BF`** | same sample |
+| +105 µs | `0x02B0` 0 → 3 | |
+
+The three registers in bold that are not freelist registers, **`0x20F8`, `0x03D0` and
+`0x03D4`**, are not in the per-kick list given earlier, and they are 0 after init. They are
+the most likely missing setup (`TO CONFIRM` by writing them): they all change before the first
+live copy.
+
+They behave as follows over the rest of the run:
+- **`0x20F8`:** 1 from the first load on; never changes again.
+- **`0x03D0`:** bit 8 set at every geometry load. Bit 16 is set at every fragment load
+  (`0x100` → `0x10100`) and cleared at the next geometry load (`0x10100` → `0x100`).
+- **`0x03D4`:** the same pattern one byte lower: bit 0 at the geometry load, bit 8 added at
+  the fragment load (`0x1` ↔ `0x101`).
+
+  The pattern fits "PM context 0 / PM context 1 loaded" flags. Whether the firmware writes
+  them or the PM sets them is not visible from the host.
+- **`0x03F0` and `0x20F0`:** 0 → 3 some time after each fragment kick, and 3 → 0 at the next
+  geometry load. They are status-like and change only after the fragment starts, so they are
+  not a precondition for the geometry.
+- **`0x02F8`:** 0 until the geometry runs, then counts up with the ALIST stack pointer. It is
+  a consequence of allocation, not a precondition.
+
+**2. The copy into the live registers is a separate step.** Over a whole run with ~6 µs
+sampling, `0x20C0` changed 136 times:
+- in 88 cases `0x20C8` took the new value in the same sample;
+- in 48 cases one sample shows the new `+0x08` with the **old** live value, and the live
+  register follows 5–13 µs later.
+
+So writing `+0x08` does not by itself update the live register; a later step does, within
+~13 µs. Which step it is was not identified.
+- At freelist updates the whole sequence sits inside a `PM_PAGE_MANAGEOP` pause: `0x02A0` 0 →
+  1 with `0x02A8` 0 → 1 in the same sample, then base, `+0x08` and live, then both back to 0.
+- At the first load there is no pause visible, but `0x20F8` and `0x03D0`/`0x03D4` change
+  first.
+
+**3. Handshakes and the fault requester.**
+- `0x0250` and `0x0258` read **0 in all ~296 000 samples** of the 6 µs run, across about 140
+  loads and updates. If the original uses them, each pulse lasts less than one sample.
+  Nothing here supports a protocol that waits several polls on them.
+- The `TAG_SB`/`TAG_ID` requester encoding of `BIF_FAULT_BANK*_REQ_STATUS` is not in the
+  public sources (`pvr_rogue_cr_defs.h` gives only the field positions), and no fault with
+  that tag was observed with the original firmware. The unit is not identified (`PENDING`).
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;
