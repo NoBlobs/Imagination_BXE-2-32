@@ -184,6 +184,7 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define CR_ISP_CTL              0x0F38  /* public */
 #define CR_ISP_AA               0x0F30  /* cmd+0x58 */
 #define CR_ISP_TILES_IN_FLIGHT  0x0FD8
+#define CR_TQ_0388              0x0388  /* no public name, role unknown; 0 per spec */
 #define CR_ZS_PAIR              0x0FA8
 #define CR_ZS_EXTRA             0x0F48
 #define CR_EVENT_PIXEL_PDS_INFO 0x0628  /* cmd+0x5C */
@@ -208,46 +209,50 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_FRAG);
 	bif_set_index(DM_FRAG, slot);
 
-	/* B. transfer configuration */
+	/*
+	 * B-D. register table of kick-compute-and-3d.md (answer to Q13).
+	 * Conditional registers are written only when their condition holds.
+	 */
+	bool fast2d = (r->isp_render & 3) == 2;
+
+	bcast_write32(CR_ISP_RENDER, r->isp_render & ~0x10u);  /* early, as the original does */
 	bcast_write32(CR_ISP_BGOBJVALS, r->isp_bgobjvals);
 	bcast_write64(CR_PDS_BGRND0_BASE, r->pds_bgnd0_base);
 	bcast_write64(CR_PDS_BGRND1_BASE, r->pds_bgnd1_base);
 	bcast_write64(CR_PDS_BGRND3_SIZEINFO, r->pds_bgnd3_sizeinfo);
-	if ((r->isp_render & 3) == 2)           /* only for FAST_2D (spec, Q12) */
+	if (fast2d) {
 		bcast_write64(CR_ISP_MTILE_BASE, r->isp_mtile_base);
-	bcast_write32(CR_ISP_RGN, r->isp_rgn);
-	bcast_write32(CR_ISP_ZLS_A, 0);
-	bcast_write32(CR_ISP_ZLS_B, 0xE4);
-
-	/* C. ISP and output */
+		bcast_write32(CR_ISP_RGN, r->isp_rgn);
+		bcast_write32(CR_ISP_ZLS_A, 0);
+		bcast_write32(CR_ISP_ZLS_B, 0xE4);
+	}
 	bcast_write32(CR_USC_PIXEL_OUTPUT, r->usc_pixel_output_ctrl);
 	for (uint32_t i = 0; i < 4; i++)
 		bcast_write32(CR_USC_CLEAR0 + 8 * i, r->usc_clear_register[i]);
 	bcast_write32(CR_FRAG_SCREEN, r->frag_screen);
 	bcast_write32(CR_ISP_MTILE_SIZE, r->isp_mtile_size);
 	bcast_write32(CR_ISP_RENDER_ORIGIN, r->isp_render_origin);
-	bcast_write32(CR_ISP_CTL, r->isp_ctl);
 	{
-		/* tiles in flight: min(ISP_CTL[15:12] + 1, 2) (spec, Q12) */
+		/* tiles in flight: min(ISP_CTL[15:12] + 1, 2) */
 		uint32_t tif = ((r->isp_ctl >> 12) & 0xF) + 1;
 
+#ifdef EXP_TIF
+		tif = EXP_TIF;          /* E022 experiment */
+#endif
 		bcast_write32(CR_ISP_TILES_IN_FLIGHT, tif > 2 ? 2 : tif);
 	}
+	bcast_write32(CR_ISP_CTL, r->isp_ctl);
 	bcast_write32(CR_ISP_AA, r->isp_aa);
-	bcast_write32(CR_ZS_PAIR, 0x88888888);
-	bcast_write32(CR_ZS_PAIR + 4, 0x88888888);
+	if (r->isp_aa & 3) {
+		bcast_write32(CR_ZS_PAIR, 0x88888888);
+		bcast_write32(CR_ZS_PAIR + 4, 0x88888888);
+	}
 	bcast_write32(CR_ZS_EXTRA, 0);
 	bcast_write32(CR_ZS_EXTRA + 4, 0);
-#ifndef TQ_NO_EVENT_PDS
-	/*
-	 * Dropped from the updated TQ table, but without it the pixel pipe never
-	 * ends (2 s watchdog); with it the job fails fast on the address-0 write
-	 * (E020, Q13).  -DTQ_NO_EVENT_PDS follows the table literally.
-	 */
 	bcast_write32(CR_EVENT_PIXEL_PDS_INFO, r->event_pixel_pds_info);
 	bcast_write32(CR_EVENT_PIXEL_PDS_CODE, r->event_pixel_pds_code);
 	bcast_write32(CR_EVENT_PIXEL_PDS_DATA, r->event_pixel_pds_data);
-#endif
+	bcast_write32(CR_TQ_0388, 0);
 	/*
 	 * PBE state = destination surface (spec answer to Q12): two banks,
 	 * WORD0 of render target n -> 0x1510 + 8n, WORD1 -> 0x1550 + 8n, taken
@@ -260,6 +265,7 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	TRACE(SFID_DBG_7, (uint32_t)(r->pbe_wordx_mrty[0] >> 32), (uint32_t)r->pbe_wordx_mrty[0],
 	      (uint32_t)(r->pbe_wordx_mrty[1] >> 32), (uint32_t)r->pbe_wordx_mrty[1],
 	      (uint32_t)(r->pbe_wordx_mrty[2] >> 32), (uint32_t)r->pbe_wordx_mrty[2]);
+	TRACE(SFID_DBG_6, r->frag_screen, r->isp_mtile_size, r->isp_ctl, r->isp_render_origin, r->isp_aa);
 	TRACE(SFID_DBG_4, r->event_pixel_pds_info, r->event_pixel_pds_code, r->event_pixel_pds_data);
 	TRACE(SFID_DBG_9, (uint32_t)(r->isp_mtile_base >> 32), (uint32_t)r->isp_mtile_base,
 	      (uint32_t)(r->pds_bgnd0_base >> 32), (uint32_t)r->pds_bgnd0_base,
@@ -271,10 +277,11 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	      hdr->ext_job_ref, hdr->int_job_ref);
 	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER);
 	dm_start(DM_FRAG, ctxaddr, cmd_off, EV_PIXELBE_END_RENDER, SFID_MAIN_4, slot);
-	isp = r->isp_render & ~0x10u;           /* mode / direction from the host */
-	bcast_write32(CR_ISP_RENDER, isp);
 	(void)cr_read32(CR_CORE_REVISION);
-	bcast_write32(CR_ISP_RENDER, cr_read32(CR_ISP_RENDER) | 0x10);
+	isp = cr_read32(CR_ISP_RENDER);
+#ifndef EXP_NO_RESUME_BIT
+	bcast_write32(CR_ISP_RENDER, isp | 0x10);
+#endif
 	bcast_write32(CR_PIXEL_LAUNCH, 1);      /* the real launch: last write (Q8, E017) */
 	return true;
 }
@@ -326,6 +333,10 @@ void kick_events(uint32_t ev)
 		if (!s->busy || !(ev & s->event_mask))
 			continue;
 		cr_write32(CR_EVENT_CLEAR, s->event_mask);
+#ifdef EXP_TQ_DELAY_US
+		if (d == DM_FRAG)
+			udelay(EXP_TQ_DELAY_US);   /* E022: is the end event early? */
+#endif
 		slc_flush_inval();
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
 		TRACE(s->finish_sfid);

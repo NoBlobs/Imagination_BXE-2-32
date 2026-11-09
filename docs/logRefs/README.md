@@ -40,5 +40,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E019](E019-hwr-and-compute-basic-67.md) | 2026-11-08 | HWR + full compute group | recovery in ~0.28 ms; `compute.pipeline.basic` **67/82 pass**, 6 fail (images), 9 not supported |
 | [E020](E020-tq3d-pbe-two-banks.md) | 2026-11-08 | TQ_3D with the corrected Q12 table | PBE in two banks, tiles-in-flight, conditional mtile base: the write to address 0 remains; host PBE words carry no address (Q13) |
 | [E021](E021-watchdog-deadline-wider-compute.md) | 2026-11-08 | Watchdog and wider compute groups | 2 s killed a long job; now uses the context's `max_deadline_ms`; indirect_dispatch 24/24, builtin_var 11/11 |
+| [E022](E022-tq3d-completes-first-tile-lost.md) | 2026-11-09 | TQ_3D with the full Q13 table | **TQ jobs complete, no fault** (conditional registers were the cause); multi-tile transfers lose their first tile, non-deterministically (Q14) |
 
 The raw data is in [data/](data/).

@@ -160,20 +160,25 @@ in [E014](logRefs/E014-tq3d-kick-does-not-start.md):
 
 1. Set `MULTICORE_FRAGMENT_CTRL_COMMON (0xF310) = 0x101` and bind the BIF slot for DM 3
    (`CAT_BASE_INDEX` bits 10:8). The binding is mandatory before any ISP or PBE write.
-2. Program the transfer, ISP and PBE registers:
+2. Program the transfer, ISP and PBE registers with the table from the Q13 answer:
+   - `ISP_RENDER = isp_render` first.
+   - Only in FAST_2D (`(isp_render & 3) == 2`): `0x0F20` (`isp_mtile_base`), `0x0F28`
+     (`isp_rgn`), `0x0FC8/0x0FCC = 0/0xE4`. Writing them outside that condition made the
+     PBE write to address 0 ([E022](logRefs/E022-tq3d-completes-first-tile-lost.md)).
+   - `0x0FA8/0x0FAC = 0x88888888` only if `isp_aa & 3`; `0x0388 = 0`.
    - `0x06B0` (PDS_BGRND2) is not written.
-   - `0x0F20` (`isp_mtile_base`) only when `(isp_render & 3) == 2`.
    - `0x0FD8` = `min(ISP_CTL[15:12] + 1, 2)` (tiles in flight).
    - PBE in two banks: `WORD0_MRTn = 0x1510 + 8n` and `WORD1_MRTn = 0x1550 + 8n`, from
      `pbe_wordx_mrty[2n]`, `[2n+1]`.
-   - `event_pixel_pds_info/code/data → 0x0628/0x0618/0x0620` is still written; the knob
-     `TQ_NO_EVENT_PDS` disables it ([E020](logRefs/E020-tq3d-pbe-two-banks.md)).
-3. Launch with two writes: `ISP_RENDER = regs.isp_render`, then RMW `| 0x10`, then
-   **`BCAST[0x0F00] = 1`**, the real launch and the last write.
+   - `event_pixel_pds_info/code/data → 0x0628/0x0618/0x0620`: the end-of-tile program,
+     whose data holds the PBE destination address.
+3. Launch: RMW `ISP_RENDER | 0x10`, then **`BCAST[0x0F00] = 1`**, the real launch and the
+   last write.
 4. Completion: `PIXELBE_END_RENDER`; finish trace `MAIN_4` "3D Transfer finished".
 
-State ([E017](logRefs/E017-tq3d-launch-fault-at-zero.md), [E020](logRefs/E020-tq3d-pbe-two-banks.md)):
-the pipe starts, then the PBE writes to address 0 (Q13). HWR discards the job.
+State ([E022](logRefs/E022-tq3d-completes-first-tile-lost.md)): TQ jobs complete without
+faults, and single-tile transfers are correct. In multi-tile transfers the first tile is
+not written, and not on every run (Q14).
 
 ## MMU faults and hardware recovery (`hwr.c`)
 

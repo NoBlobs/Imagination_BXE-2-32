@@ -1,0 +1,14 @@
+[14070.414552] [drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
+== dEQP-VK.compute.pipeline.basic.*
+  Passed:        64/82 (78.0%)
+  Failed:        9/82 (11.0%)
+  Not supported: 9/82 (11.0%)
+== dEQP-VK.api.copy_and_blit.core.buffer_to_buffer.*
+  Passed:        2/8 (25.0%)
+  Failed:        6/8 (75.0%)
+  Not supported: 0/8 (0.0%)
+== dEQP-VK.api.fill_and_update_buffer.*
+  Passed:        6/110 (5.5%)
+  Failed:        66/110 (60.0%)
+  Not supported: 38/110 (34.5%)
+  0.00s 1a68=00000001

@@ -1,0 +1,30 @@
+== dEQP-VK.api.fill_and_update_buffer.*
+  NotSupported (Exclusive transfer queue not supported. at vktTestCase.cpp:988)
+  Passed:        18/110 (16.4%)
+  Failed:        54/110 (49.1%)
+  Not supported: 38/110 (34.5%)
+  Warnings:      0/110 (0.0%)
+fill_and_update_buffer.dedicated_alloc.fill_buffer_second_part'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_0_extra_bytes_offset_0'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_0_extra_bytes_offset_12'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_0_extra_bytes_offset_4'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_0_extra_bytes_offset_8'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_1_extra_bytes_offset_0'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_1_extra_bytes_offset_12'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_1_extra_bytes_offset_4'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_1_extra_bytes_offset_8'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_2_extra_bytes_offset_0'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_2_extra_bytes_offset_12'..
+fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_2_extra_bytes_offset_4'..
+== dEQP-VK.api.copy_and_blit.core.buffer_to_buffer.*
+  Fail (CopiesAndBlitting test)
+  Passed:        3/8 (37.5%)
+  Failed:        5/8 (62.5%)
+  Not supported: 0/8 (0.0%)
+  Warnings:      0/8 (0.0%)
+copy_and_blit.core.buffer_to_buffer.partial_large'..
+copy_and_blit.core.buffer_to_buffer.partial_large_unaligned_size'..
+copy_and_blit.core.buffer_to_buffer.unaligned_regions'..
+copy_and_blit.core.buffer_to_buffer.unaligned_regions_large'..
+copy_and_blit.core.buffer_to_buffer.whole_large'..
+  0.00s 1a68=00000001

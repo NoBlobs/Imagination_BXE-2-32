@@ -1,0 +1,168 @@
+Test case 'dEQP-VK.compute.pipeline.basic.atomic_barrier_sum_small'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.branch_past_barrier'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.branching_uniform_array_access'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.concurrent_compute'..
+  Pass (Test passed)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_image_to_ssbo_large'..
+  Fail (Comparison failed for Output.values[0])
+Test case 'dEQP-VK.compute.pipeline.basic.copy_image_to_ssbo_small'..
+  Fail (Comparison failed for Output.values[0])
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_bounds'..
+  NotSupported (robustBufferAccess2 not supported by this implementation at vktComputeBasicComputeShaderTests.cpp:1300)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_multiple_invocations'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_to_image_large'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.copy_ssbo_to_image_small'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_shader'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_all'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_x'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_y'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.empty_workgroup_z'..
+  Fail (Unexpected value found in buffer: 0 while expecting 1)
+Test case 'dEQP-VK.compute.pipeline.basic.float16_isnan_isinf'..
+  NotSupported (Test requires unsupported features: Float16Int8Features.shaderFloat16 at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.float64_isnan_isinf'..
+  NotSupported (Test requires unsupported features: Features.shaderFloat64 at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.image_atomic_op_local_size_1'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.image_atomic_op_local_size_8'..
+  Fail (Comparison failed for pixel 0)
+Test case 'dEQP-VK.compute.pipeline.basic.image_barrier_multiple'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.image_barrier_single'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.indirect_after_base_dispatch'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.max_local_size_x'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.max_local_size_y'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.max_local_size_z'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.pk_immediate'..
+  NotSupported (Test requires unsupported features: Features.shaderInt16 Float16Int8Features.shaderFloat16 Storage16BitFeatures.storageBuffer16BitAccess at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.pkadd_immediate'..
+  NotSupported (Test requires unsupported features: Features.shaderInt16 Storage16BitFeatures.storageBuffer16BitAccess Storage16BitFeatures.uniformAndStorageBuffer16BitAccess at vktAmberTestCase.cpp:248)
+Test case 'dEQP-VK.compute.pipeline.basic.read_unbound_ssbo'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.remove_global_load_pass'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_array_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_array_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_array_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_array_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_coopmat_constant'..
+  NotSupported (VkPhysicalDeviceCooperativeMatrixFeaturesKHR::cooperativeMatrix not supported at vktComputeBasicComputeShaderTests.cpp:5169)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_coopmat_specconstant'..
+  NotSupported (VkPhysicalDeviceCooperativeMatrixFeaturesKHR::cooperativeMatrix not supported at vktComputeBasicComputeShaderTests.cpp:5169)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_coopmat_value'..
+  NotSupported (VkPhysicalDeviceCooperativeMatrixFeaturesKHR::cooperativeMatrix not supported at vktComputeBasicComputeShaderTests.cpp:5169)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_matrix_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_matrix_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_matrix_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_struct_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_struct_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_struct_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_struct_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_vector_constant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_vector_specconstant'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.replicated_composites_vector_value'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.secondary_compute_only_queue'..
+  NotSupported (No queue family found that only supports compute queue. at vktComputeBasicComputeShaderTests.cpp:4994)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_atomic_op_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_atomic_op_multiple_invocations'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_atomic_op_single_group'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_atomic_op_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_var_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_var_multiple_invocations'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_var_single_group'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.shared_var_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_cmd_barrier_multiple'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_cmd_barrier_single'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_local_barrier_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_local_barrier_single_group'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_local_barrier_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_rw_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_rw_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_unsized_arr_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ssbo_unsized_arr_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ubo_to_ssbo_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ubo_to_ssbo_multiple_invocations'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ubo_to_ssbo_single_group'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.ubo_to_ssbo_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.undefined_values'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.vec2_nclamp_nan_component'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.webgl_spirv_loop'..
+  Pass (Pass)
+Test case 'dEQP-VK.compute.pipeline.basic.write_multiple_arr_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.write_multiple_arr_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.write_multiple_unsized_arr_multiple_groups'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.write_multiple_unsized_arr_single_invocation'..
+  Pass (Compute succeeded)
+Test case 'dEQP-VK.compute.pipeline.basic.write_ssbo_array'..
+  Pass (Pass)
+  Passed:        64/82 (78.0%)
+  Failed:        9/82 (11.0%)
+  Not supported: 9/82 (11.0%)
+  Warnings:      0/82 (0.0%)
