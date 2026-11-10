@@ -86,6 +86,8 @@ Read **[1] Clean-room process** first. In short:
     handshake, and per-job dust/unit power.
 24. [Glossary](glossary.md) — acronyms and terms (DM, cCCB, KCCB, UFO, SLC, BIF, MTS, HWR,
     SPM, PM, RTData, PB, USC, TA, CDM, …).
+25. [Input-attachment render dump](input-attachment-dump.md) — observed register values
+    during an input-attachment render pass (Q16m).
 
 ---
 
