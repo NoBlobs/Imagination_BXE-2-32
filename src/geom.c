@@ -148,6 +148,9 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifndef EXP_HS_MODE
 #define EXP_HS_MODE 0   /* E035: no handshakes needed; 0 none, 1 after the PM writes (spec order D), 2 around them (E032: fails) */
 #endif
+	/* Q16m: a kick with First kick:0 reloads nothing in the PM (E039) */
+	if (!(flags & GEOM_FLAGS_FIRSTKICK))
+		goto pm_loaded;
 #if EXP_HS_MODE == 2
 	TRACE(SFID_DBG_3, 0xE0280B00u, cr_read32(CR_EVENT_STATUS));
 	cr_write32(CR_PM_HANDSHAKE_A, 1);
@@ -326,6 +329,7 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	TRACE(SFID_DBG_5, 0xE0280B02u, cr_read32(0x20C8), cr_read32(0x0348), cr_read32(CR_PM_HANDSHAKE_B));
 #endif
 
+pm_loaded:
 	/* C. geometry registers (observed by the spec, matched by value in E027) */
 	cr_write32(CR_PPP_CTRL, rd32(regs, 28));
 	cr_write32(CR_TE_PSG, rd32(regs, 32));

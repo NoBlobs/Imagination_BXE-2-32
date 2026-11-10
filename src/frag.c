@@ -259,7 +259,12 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_VIEW_IDX, rd32(r, FR_VIEW_IDX) & 0xFF);
 	bcast_write64(CR_ISP_MTILE_BASE, rd64(hwrt, HWRT_RGN_HEADER));
 	bcast_write32(CR_FRAG_SCREEN, rd32(common, COMMON_SCREEN_PIXEL_MAX));
+#ifndef EXP_MTILE_STRIDE
 	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_ISP_MTILE_SIZE));
+#else
+	/* E039: mtile_stride in x and y, as the spec's sampling suggests: breaks every render */
+	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_MTILE_STRIDE) * 0x10001u);
+#endif
 
 	/* C. ZS load/store, background, border */
 	bcast_write64(CR_ISP_SCISSOR_BASE, rd64(r, FR_ISP_SCISSOR_BASE));
@@ -307,6 +312,13 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	      isp_ctl, rd32(r, FR_ISP_AA), rd32(common, COMMON_ISP_MTILE_SIZE),
 	      rd32(cmd, FRAG_FLAGS));
 
+	TRACE(SFID_DBG_6, 0xE0390C04u, rd32(r, 440), rd32(r, 444), rd32(r, 48), rd32(r, 64));
+	TRACE(SFID_DBG_9, 0xE0390C02u, cr_read32(0x0F10), cr_read32(0x0F18), cr_read32(0x0F28),
+	      cr_read32(0x0F30), cr_read32(0x0F38), cr_read32(0x0F80), cr_read32(0x0F88));
+	TRACE(SFID_DBG_9, 0xE0390C03u, cr_read32(0x0FA0), cr_read32(0x0FA8), cr_read32(0x0FB0),
+	      cr_read32(0x0FB8), cr_read32(0x0FD8), cr_read32(0x0F08), cr_read32(0x0FC8));
+	TRACE(SFID_DBG_9, 0xE0390C01u, cr_read32(0x0F20), cr_read32(0x02E0), cr_read32(0x1268),
+	      cr_read32(0x1270), cr_read32(0x1280), cr_read32(0x0280), cr_read32(0x02D0));
 	/* E. trace and state, F. trigger */
 	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, rd32(cmd, FRAG_HWRT), 0, 0, ctx->pid, ctx->priority,
 	      rd32(cmd, 0), hdr->ext_job_ref, hdr->int_job_ref);

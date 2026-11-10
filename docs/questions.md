@@ -28,7 +28,7 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry
+#### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry (answered; see E039, input case still open)
 
 With the Q16l answer applied ([E038](logRefs/E038-zls-mem-free-and-depth.md)):
 - `basic_draw` passes 203/331, with no failures (the rest is not supported);

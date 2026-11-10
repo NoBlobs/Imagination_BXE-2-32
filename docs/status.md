@@ -62,6 +62,7 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E039 | input-attachment render diffed: bases match the original; `0x0F18 = mtile_stride` breaks every render (reverted); non-first geometry kicks skip the PM load; next: shared-PB mode (`CONTEXT_PB_BASE = 0`) |
 | E038 | Q16l: ZLS, multisample words, `0x0F28`, `0x0C68`; `PM_3D_MEM_FREE` was cleared by our own IRQ task; `basic_draw` 203/331 with 0 failures, depth works; input-attachment renders fault at `0x2000` (Q16m) |
 | E037 | ALIST/MLIST SP load commands `0x0288`/`0x0190` (both PM contexts): pages freed, consecutive renders work; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 with 2 fails, no faults |
 | E036 | first 3D render: geometry + fragment kick draw a correct triangle (`simple_draw_triangle_list`, `api.smoke.triangle` pass); the PM never frees the pages, so later draws fault (Q16k) |

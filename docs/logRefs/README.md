@@ -57,5 +57,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E036](E036-first-3d-render.md) | 2026-11-09 | Fragment kick with PM context 1 load | **first correct image**; the PM does not free the pages and the next draw faults (Q16k) |
 | [E037](E037-pm-list-sp-load-commands.md) | 2026-11-09 | ALIST/MLIST SP load commands | `0x0288`/`0x0190` load the list SPs of the PM context being loaded; pages freed; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 |
 | [E038](E038-zls-mem-free-and-depth.md) | 2026-11-10 | Q16l: ZLS, MSAA words, `0x0F28`, `0x0C68`, `PM_3D_MEM_FREE` | `basic_draw` 203/331 with 0 fails; depth works; our IRQ task was clearing `PM_3D_MEM_FREE`; input-attachment renders fault (Q16m) |
+| [E039](E039-input-attachment-diff.md) | 2026-11-10 | Input-attachment render diff (Q16m) | bases match; `0x0F18` stays `isp_mtile_size`; non-first kicks skip the PM load; shared-PB mode is the next lead |
 
 The raw data is in [data/](data/).
