@@ -116,6 +116,7 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	const uint8_t *gstate = fwptr(ctx->context_state_addr);
 	uint32_t slot;
 	[[maybe_unused]] bool ok_local = false, ok_global = false;
+	uint32_t pb_diff;
 
 	if (!hwrt || !common || !fl_local)
 		return false;   /* cannot run without a render target: retire */
@@ -148,6 +149,15 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifndef EXP_HS_MODE
 #define EXP_HS_MODE 0   /* E035: no handshakes needed; 0 none, 1 after the PM writes (spec order D), 2 around them (E032: fails) */
 #endif
+	{
+		uint32_t fl_l = rd32(hwrt, HWRT_FREELISTS), fl_g = rd32(hwrt, HWRT_FREELISTS + 4);
+
+		pb_diff = (fl_l != pm_ctx1_fl[0]) | ((fl_g != pm_ctx1_fl[1]) << 1);
+#ifndef EXP_SHARED_PB
+		pb_diff = 3;    /* E040: the shared-PB rule hung the board in basic_draw */
+#endif
+		TRACE(SFID_DBG_3, 0xE0400B00u, pb_diff);
+	}
 	/* Q16m: a kick with First kick:0 reloads nothing in the PM (E039) */
 	if (!(flags & GEOM_FLAGS_FIRSTKICK))
 		goto pm_loaded;
@@ -240,8 +250,10 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	 * E035: the PM copies a free list into its live state only on a load
 	 * command: write 1, wait for bit 0 to clear. Local free list first.
 	 */
-	cr_write32(CR_PM_FL_LOAD_LOCAL0, 1);
-	ok_local = cr_poll32(CR_PM_FL_LOAD_LOCAL0, 1, 0, 10000);
+	if (pb_diff & 1) {
+		cr_write32(CR_PM_FL_LOAD_LOCAL0, 1);
+		ok_local = cr_poll32(CR_PM_FL_LOAD_LOCAL0, 1, 0, 10000);
+	}
 	TRACE(SFID_DBG_4, 0xE0280B50u, ok_local, cr_read32(0x0348));
 #endif
 	{
@@ -278,8 +290,10 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 			pm_w32(0x20D0, rd32(fl_global, 32));
 			pm_w32(0x20D4, rd32(fl_global, 36));
 #ifndef EXP_NO_FL_LOAD
-			cr_write32(CR_PM_FL_LOAD_GLOBAL0, 1);
-			ok_global = cr_poll32(CR_PM_FL_LOAD_GLOBAL0, 1, 0, 10000);
+			if (pb_diff & 2) {
+				cr_write32(CR_PM_FL_LOAD_GLOBAL0, 1);
+				ok_global = cr_poll32(CR_PM_FL_LOAD_GLOBAL0, 1, 0, 10000);
+			}
 			TRACE(SFID_DBG_4, 0xE0280B51u, ok_global, cr_read32(0x20C8));
 #endif
 #ifdef EXP_PM_PAUSE
@@ -290,8 +304,12 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 			TRACE(SFID_DBG_4, 0xE0280B22u, cr_read32(0x20C8), cr_read32(0x02A8));
 #endif
 		}
-		/* CONTEXT_PB_BASE (0x02B0) = 3 at the geometry load (answer to Q16e) */
-		cr_write32(0x02B0, 3);
+		/*
+		 * CONTEXT_PB_BASE: bit 0 / bit 1 = the local / global free list differs
+		 * from the one PM context 1 (3D) holds (trace RTD 3: "FL different between
+		 * TA/3D: local, global"); 0 = shared, no load (Q16m, E040).
+		 */
+		cr_write32(0x02B0, pb_diff);
 	}
 	/* allocated page / MMU page counts of the local free list (Q16b answer) */
 #ifdef EXP_TOP_FIRST

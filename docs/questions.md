@@ -28,6 +28,20 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q16n — Input-attachment render: state outside the dumped ranges
+
+Our second render now matches `input-attachment-dump.md` in every dumped range
+([E040](logRefs/E040-input-attachment-dump-diff.md)), and the shared-PB rule
+(`CONTEXT_PB_BASE` 3 → 0, no reload) is in place. It still faults on an IPF control read at
+`0x2000`.
+1. During that second render in the reference: the non-zero registers in `0x0800–0x0BFF`,
+   `0x1000–0x14FF` and `0x1800–0x3FFF`, especially BIF/PM (`0x1200–0x12FC`, `0x0200–0x03FC`,
+   `0x2000–0x20FC`).
+2. Does the reference use the HWRTData's `macrotile_array_dev_addr` or `rtc_dev_addr`
+   (geometry or fragment kick)? Our kicks write neither.
+3. Is anything written to memory by the firmware between the two renders (region headers,
+   HWRTData fields such as the `*_last_cat_base`, `pm_alist_stack_pointer`)?
+
 #### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry (answered; see E039, input case still open)
 
 With the Q16l answer applied ([E038](logRefs/E038-zls-mem-free-and-depth.md)):

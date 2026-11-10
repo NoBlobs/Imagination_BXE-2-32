@@ -50,3 +50,5 @@ void geom_done(struct dm_state *s);
 bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off);
 void frag_done(struct dm_state *s);
+/* free lists (local, global) currently loaded in PM context 1 (frag.c) */
+extern fwaddr_t pm_ctx1_fl[2];

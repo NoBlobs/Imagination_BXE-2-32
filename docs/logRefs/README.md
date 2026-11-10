@@ -58,5 +58,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E037](E037-pm-list-sp-load-commands.md) | 2026-11-09 | ALIST/MLIST SP load commands | `0x0288`/`0x0190` load the list SPs of the PM context being loaded; pages freed; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 |
 | [E038](E038-zls-mem-free-and-depth.md) | 2026-11-10 | Q16l: ZLS, MSAA words, `0x0F28`, `0x0C68`, `PM_3D_MEM_FREE` | `basic_draw` 203/331 with 0 fails; depth works; our IRQ task was clearing `PM_3D_MEM_FREE`; input-attachment renders fault (Q16m) |
 | [E039](E039-input-attachment-diff.md) | 2026-11-10 | Input-attachment render diff (Q16m) | bases match; `0x0F18` stays `isp_mtile_size`; non-first kicks skip the PM load; shared-PB mode is the next lead |
+| [E040](E040-input-attachment-dump-diff.md) | 2026-11-10 | Diff against the reference dump | dumped ranges now match; shared-PB rule; still faults; **board hang** during `basic_draw` (Q16n) |
 
 The raw data is in [data/](data/).

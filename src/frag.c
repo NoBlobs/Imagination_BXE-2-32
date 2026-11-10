@@ -138,6 +138,8 @@ static inline void wr32(const uint8_t *p, uint32_t off, uint32_t v)
 	*(uint32_t *)(uintptr_t)(p + off) = v;
 }
 
+fwaddr_t pm_ctx1_fl[2];
+
 /* E035: value registers first, then the load command, wait for bit 0 = 0 */
 static bool pm_load_cmd(uint32_t reg)
 {
@@ -223,6 +225,8 @@ static void frag_pm_load(const uint8_t *hwrt, const uint8_t *fl_local, const uin
 		cr_write32(CR_PM_FL_BANK_GLOBAL1 + 0x1C, rd32(fl_global, FL_ALLOC_MMU_PAGES));
 		ok_g = pm_load_cmd(CR_PM_FL_LOAD_GLOBAL1);
 	}
+	pm_ctx1_fl[0] = rd32(hwrt, HWRT_FREELISTS);
+	pm_ctx1_fl[1] = rd32(hwrt, HWRT_FREELISTS + 4);
 	/* CONTEXT_PB_BASE = 0 at the fragment load (same free lists as the TA) */
 	cr_write32(CR_PM_CONTEXT_PB_BASE, 0);
 
@@ -284,6 +288,20 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	/* 0x0F28 = 4 x mtile_stride (Q16l; TO CONFIRM for other sizes and MSAA) */
 	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));
 	bcast_write64(CR_TPU_BORDER, rd64(r, FR_TPU_BORDER));
+#ifdef EXP_FRAG_UNIT_EXTRA
+	/* E040: always-on values in the original's dump that ours lacks */
+	bcast_write32(0x06D0, 0x7F);
+	bcast_write32(0x0708, 1);
+	bcast_write32(0x1500, 0x80);
+	bcast_write32(0x1780, 0x21);
+	bcast_write32(0x1788, 0x20);
+	bcast_write32(0x178C, 0x20);
+	bcast_write32(0x17B8, 0xA);
+#endif
+#ifndef EXP_NO_PIXEL_BORDER
+	/* E040: 0x1790/0x1794 hold the same table during the original's renders (pixel side) */
+	bcast_write64(0x1790, rd64(r, FR_TPU_BORDER));
+#endif
 	/* not in the spec's 3D list (PENDING): as the transfer kick does */
 	isp_ctl = rd32(r, FR_ISP_CTL);
 	tif = ((isp_ctl >> 12) & 0xF) + 1;
@@ -319,6 +337,21 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	      cr_read32(0x0FB8), cr_read32(0x0FD8), cr_read32(0x0F08), cr_read32(0x0FC8));
 	TRACE(SFID_DBG_9, 0xE0390C01u, cr_read32(0x0F20), cr_read32(0x02E0), cr_read32(0x1268),
 	      cr_read32(0x1270), cr_read32(0x1280), cr_read32(0x0280), cr_read32(0x02D0));
+#ifdef EXP_FRAG_DUMP
+	{
+		/* E040: same ranges as docsClean/input-attachment-dump.md, non-zero only */
+		static const uint16_t rng[][2] = { { 0x0600, 0x0800 }, { 0x0F00, 0x1000 },
+						   { 0x1500, 0x17F4 }, { 0x4000, 0x40FC } };
+
+		for (uint32_t k = 0; k < 4; k++)
+			for (uint32_t o = rng[k][0]; o < rng[k][1]; o += 4) {
+				uint32_t v = cr_read32(o);
+
+				if (v && o != 0x0F00)
+					TRACE(SFID_DBG_3, 0xE0400000u | o, v);
+			}
+	}
+#endif
 	/* E. trace and state, F. trigger */
 	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, rd32(cmd, FRAG_HWRT), 0, 0, ctx->pid, ctx->priority,
 	      rd32(cmd, 0), hdr->ext_job_ref, hdr->int_job_ref);
