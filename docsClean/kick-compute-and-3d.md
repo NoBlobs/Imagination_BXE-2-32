@@ -121,9 +121,10 @@ A partial render has no ZS load/store.
 - `BCAST[0x0FA8/0x0FAC]`: ZS pair (from the render target state);
 - `BCAST[0x0FB0]`/`[0x0FB4]` = `isp_scissor_base` and `BCAST[0x0FB8]`/`[0x0FBC]` =
   `isp_dbias_base` (`cmd+0x98 … +0xA4`; **O**: both observed equal). These are **not**
-  `isp_zlsctl`/`isp_zload_store_base`; the ZLS fields are elsewhere (`TO CONFIRM`).
+  `isp_zlsctl`/`isp_zload_store_base`; the ZLS registers are `0x0F48`–`0x0F6C` (see
+  "Observed during the render" below).
 - `BCAST[0x0F80]` = `isp_bgobjdepth` (**O**); `BCAST[0x0F30]` = `isp_aa` (`cmd+0x64`);
-  `BCAST[0x0F28]` = render target state.
+  `BCAST[0x0F28]` = render target state (observed: 4 × `mtile_stride`, see Q16l below).
 - `BCAST[0x17A0]`/`[0x17A4]` = `tpu_border_colour_table` (**O**; the same register the
   geometry kick writes).
 
@@ -132,6 +133,114 @@ A partial render has no ZS load/store.
 > with v1.0; see [kick-geometry-ta](kick-geometry-ta.md)). Fields not listed here are `PENDING`. The
 > observation could not place them because the read-back transfer that follows a render
 > overwrites part of the 3D registers.
+
+### Observed during the render (answers Q16l, O)
+
+Black-box runs of the open v1.1 image. The workloads were:
+- `dEQP-VK.renderpasses.renderpass1.suballocation.formats.{d16_unorm,d32_sfloat,d24_unorm_s8_uint}.{load,clear}.draw`;
+- `dEQP-VK.draw.renderpass.simple_draw.*` and `basic_draw.*`;
+- `vkfwtest bigpb` and `xfer`.
+
+All passed, and there was no recovery. Registers were read from the host, with no writes:
+- full-range snapshots at each `Kick 3D`;
+- tight sampling (≤ 10 µs) of `0x0F00–0x0FFC`, `0x1700–0x17FC` and `0x4000–0x40FC` while
+  the job ran.
+
+Command fields are at their public `rogue_fwif_frag_regs` offsets. The client CCB command
+header in front of the command is 40 bytes on this ABI.
+
+**Several ISP registers are only valid while the render runs.** The firmware, or the
+hardware, puts them back when the job ends:
+
+| Register | During the render | After the render |
+|---|---|---|
+| `ROGUE_CR_ISP_RENDER` (`0x0F08`) | 0 | 3 |
+| `0x0F38` | `isp_ctl` | `0x21000` |
+| `0x0F48` | `isp_zlsctl` | 0 |
+| `0x0F88` | `isp_bgobjvals` | `0x200` |
+
+A snapshot taken after a short render misses them; this is why earlier answers listed the
+ZLS fields as not found.
+
+#### ZS load/store (item 3)
+
+| Command field | Register | Evidence |
+|---|---|---|
+| `isp_zlsctl` (64-bit) | **`0x0F48`/`0x0F4C`** | equal to the field during the render in every depth test: `0x180AA01E` (d32 load), `0x180A201C` (d32 clear), `0x1A8EE01E` (d24s8 load). It reads 0 after the job, and in a colour-only render it stays 0. The field layout is Mesa's public `ISP_ZLSCTL` |
+| `isp_zload_store_base` | **`0x0F50`/`0x0F54` and `0x0F58`/`0x0F5C`** (the same address in both pairs) | equal in every depth test; written with **0** in a colour-only render. Mesa's public names point to a load base and a store base |
+| `isp_stencil_load_store_base` | **`0x0F60`/`0x0F64` and `0x0F68`/`0x0F6C`** | equal in the d24s8 tests. A d32 (no stencil) render writes **0** there. With packed d24s8, depth and stencil have the same address |
+| `zls_stride` (`cmd+468`) | `0x17B0` in one of the depth runs | `TO CONFIRM` (only one match) |
+| `fb_cdc_zls` | not used | this core does not have the public `REQUIRES_FB_CDC_ZLS_SETUP` feature (Mesa device info for 36.29.52.182), and the field was 0 in every command |
+| `isp_ctl` | `0x0F38` | `0x80031000` / `0x80131000` during the render (the command values), `0x21000` after |
+| `isp_bgobjvals` | `0x0F88` | `0x1FF` / `0x3FF` during the render (the command values) |
+
+**The `flags` bits.** The commands carried:
+- `0x8080` with depth only (`ROGUE_FRAG_FLAGS_DEPTHBUFFER`, bit 7);
+- `0x8180` with depth and stencil (bit 8, `STENCILBUFFER`, added);
+- `0x8000` for colour only.
+
+In every case the ZLS registers held the command's field values, which are 0 when the
+corresponding buffer is absent. The observation cannot tell whether the firmware skips the
+writes when a flag is clear or writes the zero fields (`TO CONFIRM`). Writing the field
+values unconditionally gives the observed register state.
+
+#### `0x0F28` (item 4)
+
+| Render | `0x0F18` | `0x0C20` (geometry, `mtile_stride`) | `0x0F28` |
+|---|---|---|---|
+| 64×64 (depth tests) | `0x0004_0004` | 4 | **`0x10`** |
+| 256×256 (`simple_draw`, `basic_draw`) | `0x0010_0010` | `0x10` | **`0x40`** |
+
+- `0x0F28` is not a copy of any word of the fragment command or the HWRTData.
+- In both sizes it equals **4 × `mtile_stride`** (`rogue_fwif_hwrtdata_common.mtile_stride`,
+  the value the geometry kick puts in `0x0C20`). This holds in the two sizes seen
+  (`TO CONFIRM` with more sizes and with MSAA).
+- `0x0F18` follows the macrotile layout of the render target (`TO CONFIRM`: candidate
+  `isp_mtile_size`).
+
+#### `PM_3D_MEM_FREE` (item 1)
+
+- **`ROGUE_CR_EVENT_ENABLE` (`0x0128`) reads 0 for the whole run.** No event enable is
+  needed for the bit to appear in `ROGUE_CR_EVENT_STATUS`.
+- **`0x0388`** is **1 during every render that follows a geometry pass**, and **0 during
+  transfer jobs**:
+  - it goes 0 → 1 at the fragment kick, when the local live stack pointer `0x0350` still
+    holds the pages (`0x10`);
+  - it goes 1 → 0 at the next transfer job.
+- **`PM_3D_MEM_FREE` (bit 8) followed every `PIXELBE_END_RENDER` of a render with
+  `0x0388` = 1**, and **never** one of a transfer (`0x0388` = 0). Transfers end with
+  `EVENT_STATUS` `0x18` only.
+- Timing:
+  - in small renders the bit came 7 µs after `PIXELBE_END_RENDER`; in `bigpb` it came
+    0.4–2.5 ms after;
+  - in every case it came after `0x0350` and the global live stack pointer were back at
+    their full value;
+  - the firmware clears bit 8 within 3–7 µs, then bit 3.
+- `0x03E0` read 1 throughout.
+- **Before the next load of the same PM context:** in every observed sequence, the next
+  geometry kick (and its PM load) came only after `PM_3D_MEM_FREE` had been seen and
+  cleared.
+
+So an implementation that sees the pages return but never sees bit 8 should check that
+`0x0388` is 1 while the render runs. The spec's transfer table sets it to 0, and the fragment
+kick must set it back to 1 (see [kick-geometry-ta](kick-geometry-ta.md), Q16k experiment
+D).
+
+#### Failing image comparisons (item 5)
+
+`dEQP-VK.draw.renderpass.basic_draw.draw.point_list.45` and
+`dEQP-VK.draw.renderpass.basic_draw.misc.flat_b_sat_error` **pass** with the original
+firmware on this stack.
+
+Registers during the `point_list.45` render:
+- `0x0F18` = `0x100010`, `0x0F20` = `0x13E000`, `0x0F24` = `0x80`, `0x0F28` = `0x40`;
+- `0x0F38` = `0x80031000`, `0x0F80` = `0x3F800000`, `0x0F88` = `0x200`;
+- `0x0FA0`/`0x0FA8` = `0x88`, `0x0FB0` = `0x53240`, `0x0FB4` = `0x80`, `0x0FD8` = 2;
+- `0x4078` = `0xFF000000` (only while the render runs).
+
+For `flat_b_sat_error` the capture caught only its read-back transfer (`PENDING`).
+
+The command fields of these renders map as in the tables above and in phase B.
 
 ### D. ISP pipe and output
 
@@ -228,7 +337,7 @@ All writes go through the broadcast bank. Unless stated, a value is the host's
 | `0x0618` | `event_pixel_pds_code` | always |
 | `0x0620` | `event_pixel_pds_data` | always |
 | `0x1510 + 8·n` / `0x1550 + 8·n` | `pbe_wordx_mrty[2n]` / `pbe_wordx_mrty[2n+1]` | per render target *n* |
-| `0x0388` | `0` (no public name; role unknown) | always |
+| `0x0388` | `0` (no public name; observed to gate `PM_3D_MEM_FREE`, see Q16l) | always |
 | `CR[0x1020]` of each core, then `ROGUE_CR_ISP_RENDER \|= 0x10` | per-core state saved by the context store, from `context_state_addr` | only when resuming (`fw_com_ctx_flags` has `ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME`) |
 | `ROGUE_CR_ISP_RENDER` | `isp_render` | always, immediately before the launch |
 | `0x0F00` | `1` (pixel-pipe launch) | always, last write |

@@ -821,6 +821,18 @@ job, or they are cleared at its end. Settling it needs a view of the writes duri
 
 - `CR[set+0xC68] = 1`, then **poll** `CR[set+0xC68]` until bit 0 = 1 (context
   acceptance). Must complete before the trigger.
+- **Observed (answers Q16l item 2, O).** With the original firmware, `0x0C68` reads **0 at
+  rest** at every kick of a run, including the second and later kicks of a process. At each
+  geometry kick:
+  1. it reads 1 for ≤ 20 µs, while `0x0D00` bit 5 is clear (`0x3F` → `0x1F`);
+  2. it is back to 0 (`0x0D00` → `0x3F`) about 60 µs **before** the kick counter `0x0420`
+     increments and the geometry starts.
+
+  So in the original the "write 1, poll for 1" step **succeeds at every kick**, not only the
+  first one. Nothing happens to `0x0C68` at geometry completion: the 1 → 0 return happens
+  **during the kick**, after the acceptance and before the trigger. Which action returns it
+  to 0 (a write of 0, or hardware once the context is accepted) is not visible
+  (`TO CONFIRM`).
 - `0x0408`/`0x040C` receive the VDM control-stream base (`vdm_ctrl_stream_base`, observed
   in phase C), not a freelist/ALIST configuration as earlier versions said. The pair
   `0x0418`/`0x041C` holds `geom_reg_vdm_call_stack_pointer_init` (see Q16c above).
