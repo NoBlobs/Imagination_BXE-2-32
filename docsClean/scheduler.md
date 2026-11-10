@@ -71,7 +71,7 @@ context switch. Observed sequences in [observed-sequences](observed-sequences.md
 
 ### Observed store and resume per DM (answers Q24, O)
 
-Black-box observation of the open v1.1 image on the board.
+Black-box observation on the board.
 - **Enabling CSW:** the mainline driver leaves the OS config flags at 0, so the host was
   started with the flags `GEOM_EN | FRAG_EN | CDM_EN` set in
   `rogue_fwif_osdata.fw_os_config_flags`.
@@ -135,6 +135,27 @@ interrupted mid-way: the store request is satisfied at the end of the TA.
   context-switch PDS programs or state buffer) or is inherent is not established. For
   mainline interoperability, **CDM context switching is effectively unusable**; the
   mainline default (flags 0) avoids it.
+
+**Register side of the 3D store and resume (answers Q16m item 4, O).** A `vkfwtest pre-3d`
+run was made with fragment context switching on (`ctx_switch=0x4`). There were 40
+store/resume trace events and no recovery. The registers were sampled every ~10 µs:
+
+- **Store:** no visible register change. The store-request register (`0x1000`) was never
+  seen non-zero (a pulse shorter than a sample). The stored render ends with
+  `PIXELBE_END_RENDER` like a normal one.
+- **Resume:**
+  1. The context-1 PM load puts back **the stored render's own catalogues** in
+     `PM_CAT_BASE_*1`, and its region headers in `0x0F20`.
+  2. Then, in one sample, **`ROGUE_CR_ISP_RENDER` (`0x0F08`) gets bit 4 (`0x10`)** and
+     **`0x1020` takes a new value** (`0x25003`, `0x2E007`, `0x3900A`, `0x3C02B`, … across
+     successive resumes). This matches the resume path of
+     [kick-compute-and-3d](kick-compute-and-3d.md) phase F: the per-core saved state into
+     `0x1020`, then `ISP_RENDER |= 0x10`.
+  3. `0x0F08` returns to 0 at the next fragment load.
+- `0x0298` and `0x01C8` read 0 throughout.
+
+The meaning of the `0x1020` value (a resume position, by its growth from one resume to the
+next) is `TO CONFIRM`. The contents of the saved state buffer were not read.
 
 `PENDING`: the register-level store and resume sequences per DM, and the layout of the data
 written into the context-state buffers (buffer A/B selection with

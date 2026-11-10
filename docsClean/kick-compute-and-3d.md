@@ -129,14 +129,13 @@ A partial render has no ZS load/store.
   geometry kick writes).
 
 > Source of the field names: their offsets in the public `rogue_fwif_frag_regs` (check
-> header), plus a black-box observation of one fragment job (open firmware v1.1, confirmed
-> with v1.0; see [kick-geometry-ta](kick-geometry-ta.md)). Fields not listed here are `PENDING`. The
-> observation could not place them because the read-back transfer that follows a render
-> overwrites part of the 3D registers.
+> header), plus a black-box observation of one fragment job. Fields not listed here are
+> `PENDING`. The observation could not place them because the read-back transfer that
+> follows a render overwrites part of the 3D registers.
 
 ### Observed during the render (answers Q16l, O)
 
-Black-box runs of the open v1.1 image. The workloads were:
+Black-box runs of the board. The workloads were:
 - `dEQP-VK.renderpasses.renderpass1.suballocation.formats.{d16_unorm,d32_sfloat,d24_unorm_s8_uint}.{load,clear}.draw`;
 - `dEQP-VK.draw.renderpass.simple_draw.*` and `basic_draw.*`;
 - `vkfwtest bigpb` and `xfer`.
@@ -242,6 +241,43 @@ For `flat_b_sat_error` the capture caught only its read-back transfer (`PENDING`
 
 The command fields of these renders map as in the tables above and in phase B.
 
+#### Input-attachment renders (answers Q16m item 1, O, P)
+
+`dEQP-VK.renderpasses.renderpass1.suballocation.formats.d32_sfloat.input.clear.dont_care.draw`
+**passes** on the board. From the trace and register sampling:
+
+- **The two subpasses are two renders on two HWRTData** (`RTD …c000`, then `RTD …d000`).
+  Each has its own geometry and fragment kick.
+  - The second HWRTData's region headers are the same buffer at **`+0x80`**
+    (`TE Region headers base 0x80_000D_4080`).
+  - Its MLIST base (`0x02D8`/`0x02E0`), VDM stream base (`0x0408`) and catalogue pages are
+    its own.
+  - VHeap (`0x0248`) and TPC (`0x0C40`) are shared with the first.
+- **Second render** (input attachment, colour only), register values during the render:
+
+  | Register | Value | Source |
+  |---|---|---|
+  | `0x0F20`/`0x0F24` | `0x80_000D_4080` | the second HWRTData's `rgn_header_dev_addr` (not the first's) |
+  | `0x0F38` | `0x80011000` | `isp_ctl` |
+  | `0x0F48`, `0x0F50`–`0x0F5C` | 0 | no depth |
+  | `0x0FB0`/`0x0FB4` | `0x80_0005_B480` | `isp_scissor_base` (moved from `0x532C0` of the first render) |
+  | `0x1510`/`0x1514` | `0x6880_0000` / `0x0200_007D` | PBE word 0 of target 0 |
+  | `0x1550`/`0x1554` | `0x3F` / `0x3F` | PBE word 1 |
+  | `0x0618`, `0x0620`, `0x0628` | `0x80`, `0x2BC0`, `0x201` | pipe-reset values of phase D |
+  | `PM_CAT_BASE_*1`, `0x02E0` | the second HWRTData's catalogues / MLIST | fragment PM load |
+  | `0x0388` | 1 | |
+
+  `0x06A0`–`0x06BC` (`PDS_BGRND*`, written by transfers) read 0 during both renders.
+- **The fault reported for this render decodes as an ISP parameter fetch (P).** Request
+  status `0x0010_2500_0000_2000` has, in the public vendor kernel driver's tables
+  (SpacemiT `linux-6.6` `img-rogue`, XE memory-hierarchy layout): read, `TAG_ID` `0x25` =
+  **IPF control request**, side-band 0, address `0x2000`.
+  - The IPF reads the region headers and the control streams they point to.
+  - A read at `0x2000` points to a region-header, MLIST or catalogue base that is 0, or to
+    the first HWRTData's state, while the second HWRTData renders.
+  - Compare `0x0F20`, `0x02E0`, `PM_CAT_BASE_*1` and the context-1 ALIST/MLIST stack
+    pointers of the second render with the table above (`TO CONFIRM` which one).
+
 ### D. ISP pipe and output
 
 - Pipe reset: `BCAST[ROGUE_CR_ISP_RENDER]` (`0x0F08`) `= 0`, `BCAST[0x0618] = 0x80`,
@@ -278,7 +314,7 @@ timeouts are in [observed-sequences](observed-sequences.md).
 
 > **Correction (Q14).** Earlier versions of this phase described the trigger as
 > "`ISP_RENDER |= 0x10`, then `0x0F00 = 1`", with an `(ISP_RENDER & 3) == 3` readiness check
-> and, on multicore, a condition on the launch. Re-checked against the open variant: the
+> and, on multicore, a condition on the launch. Re-checked against the board: the
 > launch is `0x0F00 = 1` alone, `| 0x10` belongs to the resume path, and the `& 3` test
 > belongs to the context-store request. The point of the Q8 answer still holds: without
 > `0x0F00 = 1` the pipe never starts.
@@ -337,7 +373,7 @@ All writes go through the broadcast bank. Unless stated, a value is the host's
 | `0x0618` | `event_pixel_pds_code` | always |
 | `0x0620` | `event_pixel_pds_data` | always |
 | `0x1510 + 8·n` / `0x1550 + 8·n` | `pbe_wordx_mrty[2n]` / `pbe_wordx_mrty[2n+1]` | per render target *n* |
-| `0x0388` | `0` (no public name; observed to gate `PM_3D_MEM_FREE`, see Q16l) | always |
+| `0x0388` | `0` (no public name; `PM_3D_MEM_FREE` was only seen after renders with `0x0388` = 1, see Q16l) | always |
 | `CR[0x1020]` of each core, then `ROGUE_CR_ISP_RENDER \|= 0x10` | per-core state saved by the context store, from `context_state_addr` | only when resuming (`fw_com_ctx_flags` has `ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME`) |
 | `ROGUE_CR_ISP_RENDER` | `isp_render` | always, immediately before the launch |
 | `0x0F00` | `1` (pixel-pipe launch) | always, last write |
@@ -356,7 +392,7 @@ records the kick time and requests a BG pass (`ROGUE_CR_MTS_SCHEDULE = 0`).
 
 > **Correction (Q14).** Earlier versions of this section placed the `isp_render` write
 > before the configuration registers and launched with `ISP_RENDER |= 0x10`. Re-checked
-> against the open variant (the target): `ISP_RENDER = isp_render` is written just before
+> against the board (the target): `ISP_RENDER = isp_render` is written just before
 > `0x0F00 = 1`, and `| 0x10` is done only when resuming, as in the 3D kick (phase F).
 
 **Pre-kick firmware job.** After every GPU-units initialisation (cold boot, warm boot, HWR

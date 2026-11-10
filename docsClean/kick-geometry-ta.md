@@ -57,9 +57,8 @@ The phases below have a **mandatory order**: each depends on the previous one.
 > `dEQP-VK.draw.renderpass.simple_draw.simple_draw_triangle_list`, 256×256 target). The
 > method compares the values in the geometry command (read from the cCCB while the job was
 > live) and the addresses printed by the public trace with a read-only snapshot of the
-> geometry core's registers, taken while the GPU was held powered. Firmware: the open image
-> **v1.1, build 6976702** (the one this spec describes); the same mapping was also
-> observed with the open image v1.0, build 6734358. Board DRAM at 1066 MT/s.
+> geometry core's registers, taken while the GPU was held powered. 
+
 
 ### B. Load the render target into the PM and synchronise
 
@@ -98,7 +97,7 @@ per bank is `TO CONFIRM`.
 
 #### PM freelist registers (answers Q16b, O)
 
-Two observation runs on the open v1.1 image:
+Two observation runs on the board:
 - the draw above;
 - `bigpb`: a 1024×1024 target with millions of triangles, out-of-memory, freelist grows and
   partial renders.
@@ -135,7 +134,7 @@ Other answers:
 
 #### PM allocation follow-up (answers Q16e, O)
 
-A second `bigpb` run on the open v1.1 image sampled `0x0200–0x0800` and `0x2000–0x2200` at
+A second `bigpb` run on the board sampled `0x0200–0x0800` and `0x2000–0x2200` at
 every freelist, OOM, grow and kick event. The global freelist's base, size and stack pointer
 change hundreds of times in that run, which makes matching possible.
 
@@ -197,7 +196,7 @@ invisible to these snapshots (`PENDING`).
 
 #### PM page catalogues on a first kick (answers Q16f, O)
 
-A third `bigpb` run on the open v1.1 image read, at each geometry kick, the `PM_CAT_BASE_*`
+A third `bigpb` run on the board read, at each geometry kick, the `PM_CAT_BASE_*`
 registers, both freelists' page stacks and the HWRTData. All reads were done from the host,
 through the GPU page tables of the application's memory context. Six geometry kicks were
 examined; they include first kicks of both HWRTData.
@@ -274,7 +273,7 @@ under Q16e above and Q16g below.
 
 #### Loading the freelists into the PM (answers Q16g, O)
 
-Four more `bigpb` runs on the open v1.1 image, sampled with a tight host loop (one sample
+Four more `bigpb` runs on the board, sampled with a tight host loop (one sample
 every 15–60 µs) instead of event snapshots:
 - run 1: the two global banks, `0x0210`/`0x0224`, `0x0250`/`0x0258`, `0x02A0`, `0x02B0`,
   `0x0D00` and `PM_CAT_BASE_*0`;
@@ -352,7 +351,7 @@ step that copies them is examined in Q16h.
 
 #### PM state set on the first load after boot (answers Q16h, O)
 
-Three `bigpb` runs on the open v1.1 image after fresh reboots, with register reads from the
+Three `bigpb` runs on the board after fresh reboots, with register reads from the
 host only:
 - a full read of `0x0200–0x03FC`, `0x2000–0x20FC` and `0x1200–0x12FC` after GPU init (module
   loaded, GPU powered, no job yet), and again after the job;
@@ -429,7 +428,7 @@ So writing `+0x08` does not by itself update the live register; a later step doe
 
 #### What happens around the live copy (answers Q16i, O)
 
-More `bigpb` runs on the open v1.1 image, each started right after a reboot so that the
+More `bigpb` runs on the board, each started right after a reboot so that the
 **first load of the boot** is captured. Register reads were done from the host only, in
 three forms:
 - a diff of every register in `0x0000–0x09FC`, `0x0C00–0x40FC` between the last idle read
@@ -628,7 +627,7 @@ for the project owner.
 
 #### Experiments on PM loading, freeing and storing (answers Q16k, O)
 
-Eight `bigpb` runs and one `xfer` run on the open v1.1 image, after a fresh reboot. All reads were done from the host, with **no register writes** (the write probes of
+Eight `bigpb` runs and one `xfer` run on the board, after a fresh reboot. All reads were done from the host, with **no register writes** (the write probes of
 Q16j caused recoveries and were not repeated). No run had a recovery. Each experiment tested
 one expected behaviour.
 
@@ -725,6 +724,98 @@ PM did not free the pages. Experiments B and F together show that freeing follow
 context-1 ALIST/MLIST stack pointers being **live** (`0x0280`/`0x02D0` equal to the loaded
 values) when the render ends. Writing `0x0278`/`0x02C8` alone is not enough. Experiment A
 cannot see the step that makes them live.
+
+#### Geometry kick that is not the first, and the OOM/PR register changes (answers Q16m item 3, O)
+
+**`First kick:0`.** `dEQP-VK.api.image_clearing.core.clear_color_attachment.cube_layers.r8g8b8a8_unorm`
+on the board gives two geometry kicks on the same HWRTData, because Mesa splits
+layered renders:
+- `First kick:1, Last kick:0`;
+- then `First kick:0, Last kick:1`.
+
+Trace and 5–10 µs register sampling of the PM set (freelist banks, live and load stack
+pointers, `0x03D0`/`0x03D4`, `PM_CAT_BASE_*`, `0x02B0`, `0x02D8`/`0x02E0`, `0x0388`)
+show the following.
+
+At the first kick: the usual first load.
+- `Load Freelist` × 2 and `CONTEXT_PB_BASE set to 0x3`;
+- `0x0270`/`0x02C0` → 0, `PM_CAT_BASE_*0` → 0 and then new pages.
+
+The `TA finished` of the first kick is **not** followed by `Store Freelist`.
+
+At the second kick (`First kick:0`):
+- the trace shows `Activate MemCtx`, `CONTEXT_PB_BASE set to 0x3`, `TA RTData … loaded on
+  HW context 0`, `UFL-TA-Base`/`FL-TA-Base` with the **current** stack pointers (local
+  `SP = 16`), `ALIST0 SP = 2, MLIST0 SP = 9` with the first kick's catalogue entries, then
+  `Kick TA`;
+- **there are no `Load Freelist` lines**;
+- **no sampled PM register changed value**: the live stack pointers (`0x0348` = `0x10`,
+  `0x0270` = 2, `0x02C0` = 9), `PM_CAT_BASE_*0`, `0x03D0`/`0x03D4`, `0x02B0` = 3 and the
+  freelist banks all keep the state the first kick left.
+
+PM context 0 simply continues. Anything rewritten at that point was rewritten with the value
+it already held. The freelists are stored and loaded into context 1 only at the fragment
+kick that follows `Last kick:1`.
+
+**A second HWRTData of the same render pass** (two subpasses, from the input-attachment
+test of Q16m item 1).
+
+At the second subpass's geometry load:
+- the trace prints `CONTEXT_PB_BASE set to 0x0, FL different between TA/3D: local: 0,
+  global: 0` and **no `Load Freelist`**: context 0 and context 1 already hold the same
+  freelists;
+- `0x02B0` stays 0;
+- `0x02D8` (MLIST), `0x0C38` (region headers, `+0x80` from the first HWRTData) and `0x0408`
+  move to the second HWRTData's values;
+- `PM_CAT_BASE_*0` and `0x0270`/`0x02C0` restart from 0.
+
+With `0x02B0` = 0, the two local live stack pointers `0x0348` and `0x0350` **move together**
+(`0x1F` → `0x10` in the same sample). With `0x02B0` = 3 (first subpass), only `0x0348`
+moved and `0x0350` took the value at the fragment load. This supports the reading of
+`CONTEXT_PB_BASE` as "freelists of the two PM contexts are separate (1) or shared (0)",
+bit 0 local and bit 1 global (`TO CONFIRM` for mixed values).
+
+**OOM paths.** The register side of the paths of [partial-render-spm](partial-render-spm.md),
+from `bigpb` with the same sampling:
+
+1. **Ready pages and grow update:**
+   - `EVENT_STATUS` = `0x90` (`PM_OUT_OF_MEMORY`), then cleared;
+   - `PM_PAGE_MANAGEOP` (`0x02A0`) 0 → 1 with the acknowledge `0x02A8` 0 → 1;
+   - then the geometry bank base `0x20B8` (down by 4 bytes per added page) and `0x20C0`, with
+     the live `0x20C8` following;
+   - then `0x02A0`/`0x02A8` → 0.
+
+   No other sampled PM register changes.
+2. **Partial render start**, when the global freelist cannot grow (its live stack pointer at
+   9):
+   - `EVENT_STATUS` `0x90` cleared;
+   - then the context-1 load: `0x03D0` bit 16 and `0x03D4` bit 8 set, `PM_CAT_BASE_*1` ← the
+     **geometry's current catalogues**, `0x02E0` ← this HWRTData's MLIST base, `0x0278`/`0x0280`
+     ← the geometry's **current** ALIST stack pointer (`0x7FA3`) and `0x02C8`/`0x02D0` ← its
+     MLIST stack pointer (`0x87`);
+   - then **`ROGUE_CR_PM_PARTIAL_RENDER_ENABLE` (`0x0338`) 0 → 1**;
+   - `0x0388` = 1.
+
+   The context-1 freelist bank is not reloaded: the two contexts share the global freelist
+   here.
+3. **During the partial render:**
+   - `0x0338` stays 1;
+   - `ROGUE_CR_EVENT_STATUS` shows `ZLS_FINISHED` | `PIXELBE_END_RENDER` (`0x4018`) at its
+     end;
+   - the local and global live stack pointers climb back to full (`0x1F`, `0xFFF7`).
+4. **Partial render end / geometry restart:**
+   - **`0x0338` 1 → 0**;
+   - then `0x0270`/`0x02C0` → 0 and the `0x03D0`/`0x03D4` context bits cleared (a context-0
+     load of zero list stack pointers);
+   - then `PM_CAT_BASE_VCE0`/`TE0`/`ALIST0` get **new** pages, and **`PM_CAT_BASE_VCE0`'s
+     high word becomes non-zero** (`0x124C` = `0x003E_F400`, the public `INIT_PAGE` field) on
+     the restarts.
+
+   The geometry then continues without a new `Kick TA`.
+
+Ten partial renders were seen, with the same pattern each time. The values written by the
+PM load commands cannot be seen (Q16k experiment A); the table gives what the registers
+hold.
 
 - **PM handshakes** (**D**, not observed directly):
   - `CR[0x250] = 1`, then **poll** `CR[0x250]` until bit 0 = 1;

@@ -94,6 +94,32 @@ HWRTData is running.
 The KCCB `FORCE_UPDATE` command forces checkpoints still `PVR_SYNC_CHECKPOINT_ACTIVE`
 (`0xAC1`) in a blocked fence to errored (`0xEFF`), unblocking it.
 
+### `FRAG_PR` when no partial render is needed (answers Q16m item 2, O)
+
+Public trace of a single draw on the board. The fragment context's cCCB holds:
+1. at offset 0, the `FENCE_PR` check on the geometry-fragment fence;
+2. the `FRAG_PR` command;
+3. the regular fence/`FRAG` commands after them.
+
+When the geometry finished **without** running out of memory:
+- `UFO PR-Check: [<geom-frag fence>] is 0x1 requires >= 0x1` passes once the geometry's
+  update has written the fence.
+- The firmware takes the next command (`Client command header DM = 3, … cmd = <ccb>+0x30`,
+  the `FRAG_PR`). **No `Kick 3D` follows for it.**
+- The firmware applies that command's **update UFOs** (`UFO Updates for FWCtx … @ 568`,
+  `UFO Update: [<frag job fence>] = 0x1`).
+- It moves on to the following commands: `UFO Checks … @ 616`, then `Kick 3D … @ 664,
+  Partial render:0`. After the real render, the same fence is updated to `0x2`.
+
+So a `FRAG_PR` that is not needed is **consumed without running**:
+- the read offset passes it;
+- its update UFOs are signalled;
+- no HWRTData state or PM register changes go with it (none were seen in the register
+  sampling).
+
+It runs (`Kick 3D … Partial render:1`) only from the out-of-memory path of
+[partial-render-spm](partial-render-spm.md).
+
 ## cCCB processing flow
 
 When a context is considered for running (on KICK or when re-evaluating the wait list):
