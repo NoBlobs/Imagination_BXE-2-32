@@ -122,8 +122,8 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 
 	TRACE(SFID_DBG_3, 0xE0280A00u, cr_read32(CR_EVENT_STATUS));     /* at entry */
 	/* A. preconditions */
-#ifndef EXP_NO_F320
-	bcast_write32(CR_MULTICORE_GEOM_CTRL, 1);
+#ifdef EXP_F320
+	bcast_write32(CR_MULTICORE_GEOM_CTRL, 1);   /* the original keeps it 0 (Q16i) */
 #endif
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_GEOM);
 #ifndef EXP_IDX_AFTER
@@ -146,7 +146,7 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define pm_w32 cr_write32
 #endif
 #ifndef EXP_HS_MODE
-#define EXP_HS_MODE 1   /* 0 none, 1 after the PM writes (spec order D), 2 around them (E032: fails) */
+#define EXP_HS_MODE 0   /* E035: no handshakes needed; 0 none, 1 after the PM writes (spec order D), 2 around them (E032: fails) */
 #endif
 #if EXP_HS_MODE == 2
 	TRACE(SFID_DBG_3, 0xE0280B00u, cr_read32(CR_EVENT_STATUS));
@@ -196,6 +196,38 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	pm_w32(CR_PM_FL_STACKTOP, rd32(fl_local, FL_STACK_TOP));
 #else
 	pm_w64(CR_PM_FL_STACKTOP - 4, (uint64_t)rd32(fl_local, FL_STACK_TOP) << 32);
+#endif
+	/* E037: catalogues, MLIST and ALIST/MLIST SPs before the load commands */
+	cr_write64(CR_BIF_PM_CAT_BASE_VCE0, rd64(hwrt, HWRT_VCE_CAT_BASE));
+	cr_write64(CR_BIF_PM_CAT_BASE_TE0, rd64(hwrt, HWRT_TE_CAT_BASE));
+	cr_write64(CR_BIF_PM_CAT_BASE_ALIST0, rd64(hwrt, HWRT_ALIST_CAT_BASE));
+	if (EXP_MLIST_REG)
+		cr_write64(EXP_MLIST_REG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR));
+	/* 0x0270/0x02C0 are read-only (E008); the writable neighbours load the SPs */
+	/* a first kick loads zero ALIST/MLIST SPs (Q16k answer, experiment B) */
+	cr_write64(CR_PM_ALIST_SP + 8, (flags & GEOM_FLAGS_FIRSTKICK) ? 0 : rd64(hwrt, HWRT_ALIST_SP));
+	cr_write32(CR_PM_MLIST_SP + 8, (flags & GEOM_FLAGS_FIRSTKICK) ? 0 : rd32(hwrt, HWRT_MLIST_SP));
+#ifndef EXP_GEOM_SP_CMD_A
+#define EXP_GEOM_SP_CMD_A 0x0288   /* the same commands load PM context 0 at the geometry (E037) */
+#endif
+#ifndef EXP_GEOM_SP_CMD_M
+#define EXP_GEOM_SP_CMD_M 0x0190
+#endif
+#if EXP_GEOM_SP_CMD_A
+	/* E037: candidate ALIST / MLIST SP load commands of PM context 0 */
+	TRACE(SFID_DBG_3, 0xE0370A00u, cr_read32(CR_PM_ALIST_SP) | (cr_read32(CR_PM_MLIST_SP) << 16));
+	{
+		bool ok_a, ok_m = true;
+
+		cr_write32(EXP_GEOM_SP_CMD_A, 1);
+		ok_a = cr_poll32(EXP_GEOM_SP_CMD_A, 1, 0, 10000);
+#if EXP_GEOM_SP_CMD_M
+		cr_write32(EXP_GEOM_SP_CMD_M, 1);
+		ok_m = cr_poll32(EXP_GEOM_SP_CMD_M, 1, 0, 10000);
+#endif
+		TRACE(SFID_DBG_3, 0xE0370A02u, ok_a | (ok_m << 1));
+	}
+	TRACE(SFID_DBG_3, 0xE0370A01u, cr_read32(CR_PM_ALIST_SP) | (cr_read32(CR_PM_MLIST_SP) << 16));
 #endif
 	/* allocated PB / MMU page counts of the local free list, PM context 0 (E035) */
 	cr_write32(0x0390, rd32(fl_local, 32));
@@ -262,14 +294,6 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #ifdef EXP_TOP_FIRST
 	pm_w64(CR_PM_FL_A, rd64(fl_local, FL_CURRENT_DEV_ADDR));   /* base again, after the top */
 #endif
-	cr_write64(CR_BIF_PM_CAT_BASE_VCE0, rd64(hwrt, HWRT_VCE_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_TE0, rd64(hwrt, HWRT_TE_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_ALIST0, rd64(hwrt, HWRT_ALIST_CAT_BASE));
-	if (EXP_MLIST_REG)
-		cr_write64(EXP_MLIST_REG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR));
-	/* 0x0270/0x02C0 are read-only (E008); the writable neighbours load the SPs */
-	cr_write64(CR_PM_ALIST_SP + 8, rd64(hwrt, HWRT_ALIST_SP));
-	cr_write32(CR_PM_MLIST_SP + 8, rd32(hwrt, HWRT_MLIST_SP));
 
 #ifdef EXP_CANARY
 	{

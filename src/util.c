@@ -100,7 +100,7 @@ bool cr_poll32(uint32_t off, uint32_t mask, uint32_t value, uint32_t timeout_us)
 		g.sysdata->cr_poll_mask[0] = mask;
 		g.sysdata->cr_poll_count[0]++;
 	}
-	TRACE(SFID_HWR_13, off, cr_read32(off));
+	TRACE(SFID_HWR_13, value ? 1u : 0u, off, cr_read32(off));   /* 3 args (E037 fix) */
 	return false;
 }
 

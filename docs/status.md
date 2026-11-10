@@ -31,8 +31,7 @@ Mesa `pvr`.
 
 | Item | State |
 |---|---|
-| Geometry kick | experimental (`-DEXP_TA`): the PM loads the free lists and the TA finishes ([E035](logRefs/E035-pm-freelist-load-commands.md)); by default geometry is retired at once |
-| Fragment (3D) kick | experimental (`-DEXP_TA`, `src/frag.c`): the **first render of a process draws correctly** ([E036](logRefs/E036-first-3d-render.md)); the PM never frees the render's pages, so the next render faults (Q16k). By default retired at once |
+| Geometry and fragment kicks | experimental (`make EXP=-DEXP_TA`, `src/geom.c`, `src/frag.c`): **renders work** ([E037](logRefs/E037-pm-list-sp-load-commands.md)): `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201 pass / 2 fail / 128 not supported, no faults. Open: multi-kick geometry, OOM/grow and partial renders, ZLS, `PM_3D_MEM_FREE` (Q16l). The default build still retires them at once |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
@@ -63,6 +62,7 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E037 | ALIST/MLIST SP load commands `0x0288`/`0x0190` (both PM contexts): pages freed, consecutive renders work; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 with 2 fails, no faults |
 | E036 | first 3D render: geometry + fragment kick draw a correct triangle (`simple_draw_triangle_list`, `api.smoke.triangle` pass); the PM never frees the pages, so later draws fault (Q16k) |
 | E035 | free-list load commands (`0x0208`/`0x0200`/`0x20B0`/`0x20A8`): the PM loads its live SPs, allocates, and the TA finishes |
 | E034 | Q16i applied: `0xF320` = 0, first-load unit values, catalogue index after the PM writes; register state now matches the original, live SPs still 0 (Q16j) |

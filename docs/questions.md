@@ -28,7 +28,30 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16k — Loading the ALIST/MLIST stack pointers of PM context 1, and freeing the pages after the 3D (blocking)
+#### Q16l — Remaining render items after the first working draws
+
+Since [E037](logRefs/E037-pm-list-sp-load-commands.md) the clean firmware renders:
+- `simple_draw` 4/4 and `api.smoke` 8/8;
+- `basic_draw` 201/331 (2 fail, 128 not supported);
+- no faults.
+
+Open points, in priority order:
+1. **`PM_3D_MEM_FREE` (`EVENT_STATUS` bit 8) is never seen on our firmware**, although the
+   pages do come back (`0x0350` → `0x1F`). Is an enable needed (a register, or a bit in
+   `0x03E0`/`0x0388`), or a clear of a previous state? What does the firmware wait on
+   before the next load of the same PM context?
+2. The **`0x0C68` context-enable poll** (write 1, poll bit 0 = 1) fails on the second and
+   later geometry kicks of a process; the TA still runs. Does the original clear `0x0C68`
+   (or something else) at geometry completion?
+3. **ZLS**: which registers take `isp_zlsctl`, `isp_zload_store_base` and
+   `isp_stencil_load_store_base` (and `fb_cdc_zls`), and under which `flags` bits
+   (`DEPTHBUFFER`, `STENCILBUFFER`)?
+4. **`0x0F28` in the 3D kick** ("render target state"): its source field and value for a
+   normal render.
+5. `basic_draw.draw.point_list.45` and `basic_draw.misc.flat_b_sat_error` fail on image
+   comparison. If the original passes them, which fragment-kick register differs?
+
+#### Q16k — Loading the ALIST/MLIST stack pointers of PM context 1, and freeing the pages after the 3D (answered + E037: commands `0x0288`/`0x0190`)
 
 The geometry finishes, and **the first draw of a run renders correctly** 
 ([E035](logRefs/E035-pm-freelist-load-commands.md),

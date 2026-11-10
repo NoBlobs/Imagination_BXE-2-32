@@ -55,5 +55,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E034](E034-pm-copy-q16i-variants.md) | 2026-11-09 | Q16i answer applied | `0xF320` back to 0, unit values and catalogue index matched; the live SPs still stay 0; the missing step changes no value (Q16j) |
 | [E035](E035-pm-freelist-load-commands.md) | 2026-11-09 | Free-list load commands (Q16j answer) | write 1, wait bit 0 = 0 after the value registers: the PM loads the free lists, allocates, and the **TA finishes** |
 | [E036](E036-first-3d-render.md) | 2026-11-09 | Fragment kick with PM context 1 load | **first correct image**; the PM does not free the pages and the next draw faults (Q16k) |
+| [E037](E037-pm-list-sp-load-commands.md) | 2026-11-09 | ALIST/MLIST SP load commands | `0x0288`/`0x0190` load the list SPs of the PM context being loaded; pages freed; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 |
 
 The raw data is in [data/](data/).

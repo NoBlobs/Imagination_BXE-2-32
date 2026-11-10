@@ -79,7 +79,12 @@ The firmware reaches registers in three ways:
 | `0x20B0` / `0x20A8` | D, E | **global free-list load command**, PM context 0 (bank `0x20B8`) / 1 (bank `0x2078`) | E035 (works) |
 | `0x0230` / `0x0234` | D, E | local free-list stack top of PM context 1, 64-bit, top from bit 22 | E035 statement + E036 |
 | `0x0350` | O, E | local free list live SP, PM context 1; loads with `0x0200` | spec + E036 |
-| `0x0280` / `0x02D0` | O, E | ALIST / MLIST stack pointer of PM context 1; not writable, stays 0 after writing `0x0278`/`0x02C8` (E036) | spec + E036 |
+| `0x0280` / `0x02D0` | O, E | ALIST / MLIST live stack pointer of PM context 1; loaded from `0x0278`/`0x02C8` by `0x0288`/`0x0190` | spec + E037 |
+| `0x0288` | E | **ALIST SP load command**: write 1, poll bit 0 = 0; loads `0x0278` into the live SP of the PM context being loaded (`0x0270` at the geometry, `0x0280` at the fragment) | E037 |
+| `0x0190` | E | **MLIST SP load command**: the same for `0x02C8` → `0x02C0` / `0x02D0` | E037 |
+| `0x0268` / `0x02B8` | E | plain storage (keep a written 1), not commands | E037 |
+| `0x03A0` / `0x03A8` | O | live local allocated PB pages, PM context 0 / 1 | spec (Q16k) |
+| `0x2000` / `0x2008` | O | live local allocated MMU pages, PM context 0 / 1 | spec (Q16k) |
 | `0x02A0` / `0x02A8` | O, E | `PM_PAGE_MANAGEOP`: 1 pauses TA allocation while the PM state changes; `0x02A8` acks it within one read | spec observation (trace) + E032 |
 | `0x02D8` / `0x02E0` | O, E | MLIST base (`pm_mlist_dev_addr`) of PM context 0 / 1 | spec observation + E028 guess |
 | `0x0420` | O, E | geometry kick counter (+1 per kick) | spec + E029 |

@@ -58,6 +58,14 @@
 #define CR_PM_FL_LOAD_GLOBAL1    0x20A8
 #define CR_PM_FL_BANK_GLOBAL1    0x2078
 #define CR_PM_LIVE_SP_LOCAL0     0x0348
+#define CR_PM_LIVE_PB_LOCAL0     0x03A0  /* live local counts (Q16k): PB ctx0 / ctx1 0x03A8 */
+#define CR_PM_LIVE_PB_LOCAL1     0x03A8
+#define CR_PM_LIVE_MMU_LOCAL0    0x2000  /* MMU ctx0 / ctx1 0x2008 */
+#define CR_PM_LIVE_MMU_LOCAL1    0x2008
+#define EV_PM_3D_MEM_FREE        (1u << 8)
+#ifndef EXP_MEM_FREE_US
+#define EXP_MEM_FREE_US          3000
+#endif
 #define CR_PM_LIVE_SP_LOCAL1     0x0350
 #define CR_PM_LIVE_SP_GLOBAL0    0x20C8
 #define CR_PM_LIVE_SP_GLOBAL1    0x2088
@@ -136,15 +144,58 @@ static void frag_pm_load(const uint8_t *hwrt, const uint8_t *fl_local, const uin
 
 	/* store from PM context 0: the stack tops the geometry left */
 	wr32(fl_local, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_LOCAL0));
+	wr32(fl_local, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_PB_LOCAL0));
+	wr32(fl_local, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_MMU_LOCAL0));
 	if (fl_global) {
 		wr32(fl_global, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_GLOBAL0));
 		wr32(fl_global, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL0));
 		wr32(fl_global, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL0 + 8));
 	}
 
+#ifndef EXP_FLAGS_AFTER_SP
 	/* fragment-load flags (Q16h): bit 16 / bit 8 */
 	cr_write32(0x03D0, cr_read32(0x03D0) | 0x10000u);
 	cr_write32(0x03D4, cr_read32(0x03D4) | 0x100u);
+#endif
+
+	/*
+	 * E037: the geometry's lists, page catalogues and ALIST/MLIST SPs go in
+	 * before the load commands; in the original the loaded 0x0278/0x02C8 and
+	 * the live 0x0280/0x02D0 change in the same sample (Q16k answer).
+	 */
+	cr_write64(CR_PM_MLIST1_BASE, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR));
+	cr_write64(CR_BIF_PM_CAT_BASE_VCE1, rd64(hwrt, HWRT_VCE_LAST_CAT_BASE));
+	cr_write64(CR_BIF_PM_CAT_BASE_TE1, rd64(hwrt, HWRT_TE_LAST_CAT_BASE));
+	cr_write64(CR_BIF_PM_CAT_BASE_ALIST1, rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE));
+	cr_write64(CR_PM_ALIST_SP_LOAD, rd64(hwrt, HWRT_ALIST_SP));
+	cr_write32(CR_PM_MLIST_SP_LOAD, rd32(hwrt, HWRT_MLIST_SP));
+#ifndef EXP_SP_LOAD_CMD
+#define EXP_SP_LOAD_CMD 0x0288    /* ALIST SP load command (E037) */
+#endif
+#ifndef EXP_SP_LOAD_CMD2
+#define EXP_SP_LOAD_CMD2 0x0190   /* MLIST SP load command (E037) */
+#endif
+#if EXP_SP_LOAD_CMD
+	/* E037: candidate ALIST/MLIST SP load command of PM context 1 (Q16k list) */
+	{
+		bool ok = pm_load_cmd(EXP_SP_LOAD_CMD);
+
+		TRACE(SFID_DBG_5, 0xE0370B02u, ok, cr_read32(0x0280), cr_read32(0x02D0));
+	}
+#endif
+#if EXP_SP_LOAD_CMD2
+	{
+		bool ok = pm_load_cmd(EXP_SP_LOAD_CMD2);
+
+		TRACE(SFID_DBG_5, 0xE0370B03u, ok, cr_read32(0x0280), cr_read32(0x02D0));
+	}
+#endif
+#ifdef EXP_FLAGS_AFTER_SP
+	/* E037: the flag bits as the trigger of the ALIST/MLIST SP copy */
+	cr_write32(0x03D0, cr_read32(0x03D0) | 0x10000u);
+	cr_write32(0x03D4, cr_read32(0x03D4) | 0x100u);
+	TRACE(SFID_DBG_4, 0xE0370B01u, cr_read32(0x0280), cr_read32(0x02D0));
+#endif
 
 	/* local free list, PM context 1 */
 	cr_write64(CR_PM_FL_BASE_LOCAL1, rd64(fl_local, FL_CURRENT_DEV_ADDR));
@@ -164,13 +215,6 @@ static void frag_pm_load(const uint8_t *hwrt, const uint8_t *fl_local, const uin
 	/* CONTEXT_PB_BASE = 0 at the fragment load (same free lists as the TA) */
 	cr_write32(CR_PM_CONTEXT_PB_BASE, 0);
 
-	/* the geometry's lists and page catalogues (stored by geom_done) */
-	cr_write64(CR_PM_MLIST1_BASE, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR));
-	cr_write64(CR_BIF_PM_CAT_BASE_VCE1, rd64(hwrt, HWRT_VCE_LAST_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_TE1, rd64(hwrt, HWRT_TE_LAST_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_ALIST1, rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE));
-	cr_write64(CR_PM_ALIST_SP_LOAD, rd64(hwrt, HWRT_ALIST_SP));
-	cr_write32(CR_PM_MLIST_SP_LOAD, rd32(hwrt, HWRT_MLIST_SP));
 
 	TRACE(SFID_DBG_8, 0xE0360B00u, ok_l, ok_g, cr_read32(CR_PM_LIVE_SP_LOCAL1),
 	      cr_read32(CR_PM_LIVE_SP_GLOBAL1), cr_read32(0x0280), cr_read32(0x02D0));
@@ -195,6 +239,7 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_FRAG);
 	bif_set_index(DM_FRAG, slot);
 	frag_pm_load(hwrt, fl_local, fl_global);
+	bcast_write32(0x0388, 1);       /* a transfer clears it; the 3D kick sets it back (Q16k) */
 
 	/* B. ISP configuration */
 	bcast_write32(CR_USC_PIXEL_OUTPUT, rd32(r, FR_USC_PIXEL_OUTPUT));
@@ -265,6 +310,18 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 /* Fragment completion: store the free lists back from PM context 1. */
 void frag_done(struct dm_state *s)
 {
+	/* the PM returns the pages by itself, then raises PM_3D_MEM_FREE (Q16k) */
+	bool freed = false;
+
+	/* up to ~3 ms (the spec saw 0.4-2.5 ms); bit 8 is not seen yet (E037) */
+	for (uint32_t us = 0; us < EXP_MEM_FREE_US; us += 10) {
+		if ((freed = cr_read32(CR_EVENT_STATUS) & EV_PM_3D_MEM_FREE))
+			break;
+		udelay(10);
+	}
+
+	cr_write32(CR_EVENT_CLEAR, EV_PM_3D_MEM_FREE);
+	TRACE(SFID_DBG_3, 0xE0370D01u, freed);
 	const uint8_t *hwrt = fwptr(s->hwrt);
 	const uint8_t *fl_local = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS)) : NULL;
 	const uint8_t *fl_global = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS + 4)) : NULL;
@@ -274,8 +331,11 @@ void frag_done(struct dm_state *s)
 	      cr_read32(0x0D00));
 	if (!hwrt)
 		return;
-	if (fl_local)
+	if (fl_local) {
 		wr32(fl_local, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_LOCAL1));
+		wr32(fl_local, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_PB_LOCAL1));
+		wr32(fl_local, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_MMU_LOCAL1));
+	}
 	if (fl_global) {
 		wr32(fl_global, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_GLOBAL1));
 		wr32(fl_global, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL1));
