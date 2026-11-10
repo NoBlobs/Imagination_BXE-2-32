@@ -28,7 +28,31 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q16l — Remaining render items after the first working draws
+#### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry
+
+With the Q16l answer applied ([E038](logRefs/E038-zls-mem-free-and-depth.md)):
+- `basic_draw` passes 203/331, with no failures (the rest is not supported);
+- `PM_3D_MEM_FREE` is seen after every render;
+- depth load and store work.
+
+Open:
+1. **Renders that read an input attachment** (`renderpass1.suballocation.formats.*.input.*`,
+   36 of 81 for `d32_sfloat`). The second subpass's render (colour only, `flags` `0x8000`,
+   `isp_ctl` `0x80011000`) faults on a **read at GPU VA `0x2000`**: BIF0 MMU status
+   `0xD001`, request `0x00102500_00002000`. During such a render in the original, which
+   fragment-kick registers hold values that ours does not write? A full-range sample of
+   `0x0600–0x07FC`, `0x0F00–0x0FFC`, `0x1500–0x17FC` and `0x4000–0x40FC` during that
+   render would let us diff.
+2. **`FRAG_PR`** (cCCB type `0x2ABC80CC`) is queued before every fragment command. We
+   retire it without running it. What does the original do with it when no partial render
+   is needed? Does it stay unrun, or does it have side effects (UFO updates, HWRTData
+   state)?
+3. **Multi-kick geometry, OOM, grow and partial renders.** Which registers does the
+   firmware write for a geometry kick that is not the first (`First kick:0`) of the same
+   HWRTData, and for the OOM paths of `partial-render-spm.md` (pause, free-list update,
+   resume, PR)? Register list and order, in the same form as the load commands.
+
+#### Q16l — Remaining render items after the first working draws (answered, see E038)
 
 Since [E037](logRefs/E037-pm-list-sp-load-commands.md) the clean firmware renders:
 - `simple_draw` 4/4 and `api.smoke` 8/8;

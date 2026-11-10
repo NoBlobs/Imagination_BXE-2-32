@@ -31,7 +31,7 @@ Mesa `pvr`.
 
 | Item | State |
 |---|---|
-| Geometry and fragment kicks | experimental (`make EXP=-DEXP_TA`, `src/geom.c`, `src/frag.c`): **renders work** ([E037](logRefs/E037-pm-list-sp-load-commands.md)): `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201 pass / 2 fail / 128 not supported, no faults. Open: multi-kick geometry, OOM/grow and partial renders, ZLS, `PM_3D_MEM_FREE` (Q16l). The default build still retires them at once |
+| Geometry and fragment kicks | experimental (`make EXP=-DEXP_TA`, `src/geom.c`, `src/frag.c`): **renders work** ([E038](logRefs/E038-zls-mem-free-and-depth.md)): `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 203 pass / 0 fail / 128 not supported, depth load/store; no faults in these groups. Open: input-attachment renders, `FRAG_PR`, multi-kick geometry, OOM/grow and partial renders (Q16m). The default build still retires them at once |
 | Per-job dust power (`POW_RASCALDUST`) | not needed: the mainline host does not set it. Dusts are powered at boot and after HWR. |
 
 ## Findings (logRefs)
@@ -62,6 +62,7 @@ Mesa `pvr`.
 | E022 | the conditional TQ registers caused the address-0 write; TQs now complete; multi-tile transfers lose the first tile |
 | E023 | `ISP_RENDER` must be written right before `0x0F00` (an early write lost the first tile); per-DM completion flush; no failures in five groups |
 | E024 | `vkfwtest`: compute and transfer workloads run; graphics scenarios finish without drawing (no TA/3D kicks) |
+| E038 | Q16l: ZLS, multisample words, `0x0F28`, `0x0C68`; `PM_3D_MEM_FREE` was cleared by our own IRQ task; `basic_draw` 203/331 with 0 failures, depth works; input-attachment renders fault at `0x2000` (Q16m) |
 | E037 | ALIST/MLIST SP load commands `0x0288`/`0x0190` (both PM contexts): pages freed, consecutive renders work; `simple_draw` 4/4, `api.smoke` 8/8, `basic_draw` 201/331 with 2 fails, no faults |
 | E036 | first 3D render: geometry + fragment kick draw a correct triangle (`simple_draw_triangle_list`, `api.smoke.triangle` pass); the PM never frees the pages, so later draws fault (Q16k) |
 | E035 | free-list load commands (`0x0208`/`0x0200`/`0x20B0`/`0x20A8`): the PM loads its live SPs, allocates, and the TA finishes |

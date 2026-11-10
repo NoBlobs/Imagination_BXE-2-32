@@ -100,6 +100,11 @@ The firmware reaches registers in three ways:
 | `0x20F8` | O, E | 0 → 1 at the first load after boot, then stays 1; our init writes it 1 at boot | spec (Q16h) + E033 |
 | `0x03D0` / `0x03D4` | O, E | per-load bits: geometry bit 8 / bit 0, fragment bit 16 / bit 8 ("PM context loaded"?); plain storage on ours | spec (Q16h) + E033 |
 | `0x0388` | O, E | 1 after init and after jobs in the original; our TQ kick writes 0 (Q13 table) | spec + E033 |
+| `0x0F48` / `0x0F4C` | O | `isp_zlsctl` (64-bit, Mesa `ISP_ZLSCTL` layout); only valid while the render runs | spec (Q16l) |
+| `0x0F50` / `0x0F58` | O | depth load / store base, both = `isp_zload_store_base` (0 without depth) | spec (Q16l) |
+| `0x0F60` / `0x0F68` | O | stencil load / store base, both = `isp_stencil_load_store_base` (0 without stencil) | spec (Q16l) |
+| `0x0F28` | O, E | 4 × `mtile_stride` during a render (64×64 and 256×256 seen) | spec (Q16l) + E038 |
+| `0x0FA0` / `0x0FA8` | O, E | `0x88` during a render: written from `multi_sample_ctl` / `flipped_multi_sample_ctl`; fixes `point_list.45` | spec (Q16l) + E038 |
 | `0xF320` | P, O | `MULTICORE_GEOMETRY_CTRL_COMMON`: stays 0 in the original (Q16i); our earlier write of 1 removed in E034 experiments | mainline defs + spec |
 | `0x1500`, `0x1780`, `0x1788`/`0x178C`, `0x0FA0`, `0x17B8` | O | change with the unit init at the first load: `0x80`, `0x40`→`0x21`, `0x20`/`0x20`, `0x88`, `0xA` | spec (Q16i) |
 | `0x0250` / `0x0258` | S, E | PM handshakes; PM writes made while `0x0250 = 1` fault at address 0 (E032) | spec + E032 |

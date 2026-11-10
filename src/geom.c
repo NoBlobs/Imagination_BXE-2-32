@@ -368,8 +368,13 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 
 	TRACE(SFID_DBG_3, 0xE0280C00u, cr_read32(CR_EVENT_STATUS));     /* after phase C/D */
 	/* E. enable the context */
+	/*
+	 * Q16l: 0x0C68 is 1 for <= 20 us at every kick, then back to 0 before the
+	 * trigger. A later kick can be accepted before the first read, so wait for
+	 * the return to 0 instead of for the 1 (E038).
+	 */
 	cr_write32(CR_GEOM_CTX_ENABLE, 1);
-	if (!cr_poll32(CR_GEOM_CTX_ENABLE, 1, 1, 10000))
+	if (!cr_poll32(CR_GEOM_CTX_ENABLE, 1, 0, 10000))
 		TRACE(SFID_DBG_2, 0xE028E000u);
 
 	/* F. trace, state, watchdog */

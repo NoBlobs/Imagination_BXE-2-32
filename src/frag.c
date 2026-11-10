@@ -24,6 +24,9 @@
 #define FR_EVENT_PDS_DATA        72
 #define FR_ISP_SCISSOR_BASE      96
 #define FR_ISP_DBIAS_BASE        104
+#define FR_ISP_ZLSCTL            120
+#define FR_ISP_ZLOAD_STORE_BASE  128
+#define FR_ISP_STENCIL_BASE      136
 #define FR_PBE_WORD              152    /* [8][3] u64 */
 #define FR_TPU_BORDER            344
 #define FR_PDS_BGND              352    /* [3] u64 */
@@ -40,7 +43,9 @@
 #define HWRT_FREELISTS           176
 #define HWRT_RGN_HEADER          256
 #define COMMON_SCREEN_PIXEL_MAX  4
-#define COMMON_RGN_HEADER_SIZE   76
+#define COMMON_MSCTL             8
+#define COMMON_MSCTL_FLIPPED     16
+#define COMMON_MTILE_STRIDE      36
 #define COMMON_ISP_MTILE_SIZE    80
 #define FL_CURRENT_DEV_ADDR      8
 #define FL_STACK_TOP             16
@@ -95,7 +100,13 @@
 #define CR_ISP_AA                0x0F30
 #define CR_ISP_CTL               0x0F38
 #define CR_ISP_TILES_IN_FLIGHT   0x0FD8
-#define CR_ZS_PAIR               0x0FA8
+#define CR_ZS_PAIR               0x0FA8  /* flipped multisample control (Q16l) */
+#define CR_ISP_MSCTL             0x0FA0
+#define CR_ISP_ZLSCTL            0x0F48
+#define CR_ISP_ZLOAD_BASE        0x0F50
+#define CR_ISP_ZSTORE_BASE       0x0F58
+#define CR_ISP_STENCIL_LOAD_BASE 0x0F60
+#define CR_ISP_STENCIL_STORE_BASE 0x0F68
 #define CR_TPU_BORDER            0x17A0
 #define CR_PDS_BGRND0_BASE       0x06A0
 #define CR_PDS_BGRND1_BASE       0x06A8
@@ -249,20 +260,24 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write64(CR_ISP_MTILE_BASE, rd64(hwrt, HWRT_RGN_HEADER));
 	bcast_write32(CR_FRAG_SCREEN, rd32(common, COMMON_SCREEN_PIXEL_MAX));
 	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_ISP_MTILE_SIZE));
-#ifdef EXP_FRAG_RGN
-	bcast_write32(CR_ISP_RGN, rd32(common, COMMON_RGN_HEADER_SIZE));
-#endif
 
-	/* C. ZS (no load/store yet), background, border */
+	/* C. ZS load/store, background, border */
 	bcast_write64(CR_ISP_SCISSOR_BASE, rd64(r, FR_ISP_SCISSOR_BASE));
 	bcast_write64(CR_ISP_DBIAS_BASE, rd64(r, FR_ISP_DBIAS_BASE));
 	bcast_write32(CR_ISP_BGOBJDEPTH, rd32(r, FR_ISP_BGOBJDEPTH));
 	bcast_write32(CR_ISP_BGOBJVALS, rd32(r, FR_ISP_BGOBJVALS));
 	bcast_write32(CR_ISP_AA, rd32(r, FR_ISP_AA));
-	if (rd32(r, FR_ISP_AA) & 3) {
-		bcast_write32(CR_ZS_PAIR, 0x88888888);
-		bcast_write32(CR_ZS_PAIR + 4, 0x88888888);
-	}
+	/* Q16l: 0x0FA0/0x0FA8 read 0x88 during a render = the multisample control words */
+	bcast_write64(CR_ISP_MSCTL, rd64(common, COMMON_MSCTL));
+	bcast_write64(CR_ZS_PAIR, rd64(common, COMMON_MSCTL_FLIPPED));
+	/* ZS load/store (Q16l): the field values, 0 when the buffer is absent */
+	bcast_write64(CR_ISP_ZLSCTL, rd64(r, FR_ISP_ZLSCTL));
+	bcast_write64(CR_ISP_ZLOAD_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_ZSTORE_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, rd64(r, FR_ISP_STENCIL_BASE));
+	bcast_write64(CR_ISP_STENCIL_STORE_BASE, rd64(r, FR_ISP_STENCIL_BASE));
+	/* 0x0F28 = 4 x mtile_stride (Q16l; TO CONFIRM for other sizes and MSAA) */
+	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));
 	bcast_write64(CR_TPU_BORDER, rd64(r, FR_TPU_BORDER));
 	/* not in the spec's 3D list (PENDING): as the transfer kick does */
 	isp_ctl = rd32(r, FR_ISP_CTL);
@@ -311,17 +326,21 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 void frag_done(struct dm_state *s)
 {
 	/* the PM returns the pages by itself, then raises PM_3D_MEM_FREE (Q16k) */
-	bool freed = false;
+	/*
+	 * E038: in a small render PM_3D_MEM_FREE follows PIXELBE_END_RENDER by
+	 * ~7 us, so the IRQ task usually saw (and cleared) both bits together.
+	 */
+	bool freed = cr_read32(CR_DBG_IRQ_LASTEV) & EV_PM_3D_MEM_FREE;
 
 	/* up to ~3 ms (the spec saw 0.4-2.5 ms); bit 8 is not seen yet (E037) */
-	for (uint32_t us = 0; us < EXP_MEM_FREE_US; us += 10) {
+	for (uint32_t us = 0; !freed && us < EXP_MEM_FREE_US; us += 10) {
 		if ((freed = cr_read32(CR_EVENT_STATUS) & EV_PM_3D_MEM_FREE))
 			break;
 		udelay(10);
 	}
 
 	cr_write32(CR_EVENT_CLEAR, EV_PM_3D_MEM_FREE);
-	TRACE(SFID_DBG_3, 0xE0370D01u, freed);
+	TRACE(SFID_DBG_4, 0xE0370D01u, freed, cr_read32(0x0388));
 	const uint8_t *hwrt = fwptr(s->hwrt);
 	const uint8_t *fl_local = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS)) : NULL;
 	const uint8_t *fl_global = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS + 4)) : NULL;
