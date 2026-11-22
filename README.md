@@ -33,7 +33,10 @@ See [docs/status.md](docs/status.md) for details and the next steps.
 The work is split between two teams:
 
 - The **dirty team** analysed the original firmware and wrote a functional
-  specification in [docsClean/](docsClean/README.md). It contains no code.
+  specification in [docsClean/](docsClean/README.md). It contains no code. It is
+  published as its own public repository,
+  [NoBlobs-docs/Imagination_BXE-2-32](https://github.com/NoBlobs-docs/Imagination_BXE-2-32),
+  included here as a git submodule.
 - The **clean team** wrote everything else in this repository. Its only sources are:
   - `docsClean/`;
   - the public upstream Linux `drm/imagination` headers and driver;
@@ -49,13 +52,25 @@ driver sources. Gaps in the specification are sent back as questions in
 ## Repository layout
 
 ```
-docsClean/   functional specification from the dirty team (read-only)
+docsClean/   functional specification from the dirty team (git submodule, read-only)
 src/         firmware: C23 + microMIPS assembly, Makefile, linker script
 tools/       .fw packer, trace-ID generator, deploy / test / register-probe scripts
 docs/        implementation documentation
 docs/logRefs/  experiment log (E001…) with raw data in docs/logRefs/data/
 build/       build output (git-ignored)
 ```
+
+## Getting the sources
+
+`docsClean/` is a submodule, so clone with it:
+
+```bash
+git clone --recurse-submodules <this repository>
+```
+
+In an existing clone, `git submodule update --init` fetches it. To move to a newer
+version of the specification, run `git submodule update --remote docsClean`, then
+commit the new pointer.
 
 ## Building
 
