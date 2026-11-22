@@ -1,0 +1,3 @@
+# generated documentation and the local Sphinx venv
+/_build/
+/.venv/

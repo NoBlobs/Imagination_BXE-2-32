@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Thalles Campagnani */
+/*
+ * The Read the Docs theme keeps table cells on one line (white-space: nowrap),
+ * so tables with register lists or sentences overflow to the right. Let the
+ * cells wrap; code inside a cell may break too.
+ */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal;
+  vertical-align: top;
+}
+.wy-table-responsive {
+  overflow: visible;
+}
+.wy-table-responsive table td code.literal,
+.wy-table-responsive table th code.literal {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

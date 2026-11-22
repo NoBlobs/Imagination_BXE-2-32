@@ -26,7 +26,7 @@ this BVNC as experimental.
 | Transfer (TQ_3D) | **works**: `api.fill_and_update_buffer` 72/72 and `api.copy_and_blit.core.buffer_to_buffer` 8/8 of the supported cases |
 | Geometry and fragment kicks | not implemented |
 
-See [docs/status.md](docs/status.md) for details and the next steps.
+See [docs/firmware/status-and-experiments.rst](docs/firmware/status-and-experiments.rst) for details and the next steps.
 
 ## Clean-room process
 
@@ -35,7 +35,7 @@ The work is split between two teams:
 - The **dirty team** analysed the original firmware and wrote a functional
   specification in [docsClean/](docsClean/README.md). It contains no code. It is
   published as its own public repository,
-  [NoBlobs-docs/Imagination_BXE-2-32](https://github.com/NoBlobs-docs/Imagination_BXE-2-32),
+  [NoBlobs-docsClean/Imagination_BXE-2-32](https://github.com/NoBlobs-docsClean/Imagination_BXE-2-32),
   included here as a git submodule.
 - The **clean team** wrote everything else in this repository. Its only sources are:
   - `docsClean/`;
@@ -82,13 +82,13 @@ make -C src
 
 The output is `build/rogue_36.29.52.182_v1.fw`, the container that the mainline
 driver loads. Build flags, the LLVM microMIPS workarounds and the experiment knobs are
-described in [docs/toolchain.md](docs/toolchain.md).
+described in [docs/firmware/build-and-toolchain.rst](docs/firmware/build-and-toolchain.rst).
 
 ## Running on the K1
 
 1. Build a kernel from the `IMG-BXE-2-32` branch of the Linux fork. It adds the K1 GPU
    power domain, the GPU device-tree node and the experimental BVNC entry; see
-   [docs/board-and-kernel.md](docs/board-and-kernel.md).
+   [docs/linux-driver/kernel-integration.rst](docs/linux-driver/kernel-integration.rst).
 2. Install the firmware where the kernel finds it before the stock location:
 
    ```bash
@@ -110,16 +110,15 @@ board.
 
 ## Documentation
 
-| Document | Content |
-|---|---|
-| [docs/README.md](docs/README.md) | documentation index |
-| [docs/architecture.md](docs/architecture.md) | source files, interrupt-driven execution model, state |
-| [docs/boot-and-memory.md](docs/boot-and-memory.md) | memory map, MIPS TLB and wrapper remap, boot sequence |
-| [docs/host-interface.md](docs/host-interface.md) | `.fw` container, host handshake, command rings, power, trace |
-| [docs/scheduler-and-kicks.md](docs/scheduler-and-kicks.md) | client CCB scheduling, data masters, compute kick |
-| [docs/registers.md](docs/registers.md) | registers used and their provenance, register survey |
-| [docs/board-and-kernel.md](docs/board-and-kernel.md) | board, kernel branch, GRUB entry, scripts, safety rules |
-| [docs/logRefs/](docs/logRefs/README.md) | experiments and findings |
+The documentation in `docs/` is written in reStructuredText and built with Sphinx (`make -C docs`, see [docs/README.md](docs/README.md)):
+
+| Section | License | Content |
+|---|---|---|
+| [docs/index.rst](docs/index.rst) | `GPL-3.0-or-later` | documentation index, status overview and provenance labels |
+| [docs/hardware/](docs/hardware/index.rst) | `CC-BY-SA-4.0` | BXE-2-32 architecture, MIPS memory/remap, RGX registers, GPU bring-up/PM/HWR, reference board and safety rules |
+| [docs/linux-driver/](docs/linux-driver/index.rst) | `GPL-2.0-only` | mainline `powervr` driver role, kernel branch `IMG-BXE-2-32`, `.fw` container/ABI, host↔firmware protocol, test workflow |
+| [docs/firmware/](docs/firmware/index.rst) | `GPL-3.0-or-later` | source architecture, clang/lld toolchain and knobs, boot/runtime/TLB, scheduler and kicks, power/HWR/stats, status and experiments |
+| [docs/logRefs/](docs/logRefs/README.md) | `GPL-3.0-or-later` | experiments (`E001`–`E040`) and raw findings |
 
 ## License
 

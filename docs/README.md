@@ -1,66 +1,80 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Thalles Campagnani -->
 
-# BXE-2-32 firmware: clean-team implementation
+# docs — project documentation
 
-This is a GPLv3 firmware for the MIPS microcontroller of the PowerVR Rogue BXE-2-32
-(BVNC `36.29.52.182`) in the SpacemiT K1. It is written only from:
+This folder holds the documentation of the free PowerVR Rogue **BXE-2-32**
+(BVNC `36.29.52.182`) GPU firmware for the **SpacemiT K1** SoC. It is written
+by the clean team in reStructuredText (`.rst`) and built with Sphinx. It
+complements, and never modifies, the clean-room specification in
+[`../docsClean/`](../docsClean/README.md).
 
-- the clean specification in `docsClean/`;
-- the public upstream `drm/imagination` headers and driver;
-- public Mesa;
-- public MIPS architecture documents;
-- black-box experiments on the board with this firmware, recorded in [logRefs/](logRefs/).
-
-It runs under the unmodified mainline `powervr` driver, apart from the experimental
-BVNC entry, and the Mesa `pvr` Vulkan driver.
-
-## Documents
-
-| Document | Content |
-|---|---|
-| [status.md](status.md) | what works, what does not, the next steps |
-| [architecture.md](architecture.md) | source files, execution model (interrupt-driven), state, module map |
-| [boot-and-memory.md](boot-and-memory.md) | MIPS TLB and wrapper remap, memory map, layout table, boot sequence, **GPU bring-up (`gpu_init.c`)**, TLB refill, exceptions, debug scratch registers |
-| [host-interface.md](host-interface.md) | `.fw` container and device info, start-up handshake, KCCB/FWCCB, host notification, power and warm boot, trace format |
-| [scheduler-and-kicks.md](scheduler-and-kicks.md) | data masters, context table, client CCB walk and UFOs, completion, cleanup, BIF slots, compute kick, experimental TQ_3D kick, MMU faults |
-| [registers.md](registers.md) | every register used, with provenance; GPU bring-up registers; boot values; writable-bit map |
-| [toolchain.md](toolchain.md) | build, flags, LLVM microMIPS workarounds, experiment knobs |
-| [board-and-kernel.md](board-and-kernel.md) | board facts, kernel branch `IMG-BXE-2-32`, GRUB entry, scripts, safety rules |
-| [questions.md](questions.md) | questions for the spec maintainer (dirty team), with what experiments answered |
-| [logRefs/](logRefs/README.md) | experiment log E001…: question, set-up, raw observation, conclusion |
-
-## Repository layout
+## Structure
 
 ```
-docsClean/   clean specification (read-only for the clean team)
-src/         firmware source: C23 + microMIPS assembly, Makefile, linker script
-tools/       container packer, trace-ID generator, deploy/test/probe scripts
-docs/        this documentation; docs/logRefs/ = experiments; docs/logRefs/data/ = raw dumps
-build/       build output (git-ignored)
+docs/
+├── index.rst            entry point, status overview and provenance labels
+├── hardware/            BXE-2-32 GPU and K1 SoC hardware as seen by the firmware
+├── linux-driver/        mainline Linux powervr driver integration and host contract
+├── firmware/            clean-room GPLv3 firmware implementation
+├── logRefs/             experiment log (E001…) and raw dumps in logRefs/data/
+├── questions.md         questions for the clean-room spec maintainer (dirty team)
+├── conf.py              Sphinx configuration (Read the Docs theme + dark mode)
+├── Makefile             build entry points
+└── requirements.txt     Python packages for the build (Sphinx, RTD theme, dark mode)
 ```
 
-## Quick start
+| Part | License (SPDX) | Contents |
+|---|---|---|
+| `hardware/` | `CC-BY-SA-4.0` | GPU architecture (BVNC `36.29.52.182`, MIPS32r2 microMIPS core, data masters), two-stage MIPS translation and wrapper remap, RGX register map with provenance and writable-bit probe, GPU bring-up / Parameter Manager / flush / HWR hardware behaviour, reference board (`BPI-F3`) and bench safety rules. |
+| `linux-driver/` | `GPL-2.0-only` | Host side of the contract with mainline `drm/imagination` (`powervr.ko`) and Mesa `pvr`, kernel branch `IMG-BXE-2-32` (K1 APMU power domain, DT node, experimental BVNC), `.fw` container and FWIF ABI, host-firmware protocol (KCCB, FWCCB, IRQ, runtime PM, stats, HWR log, debugfs trace), scripts and test workflow. |
+| `firmware/` | `GPL-3.0-or-later` | Clean-room implementation (`src/`): source files, interrupt-driven execution model, clang/lld microMIPS toolchain and experiment knobs, `boot.S` / TLB refill / `gpu_init.c`, client CCB scheduler and data-master kicks (CDM, TQ_3D, experimental GEOM/FRAG), power / HWR / stats, current status and experiment findings (`E001`–`E040`). |
 
-```bash
-make -C src                         # -> build/rogue_36.29.52.182_v1.fw
-KH=<known_hosts> tools/deploy.sh fw # -> board /lib/firmware/updates/powervr/
-# board, booted with the "img-gpu" GRUB entry (powervr blacklisted):
-sudo modprobe powervr exp_hw_support=1
+### Licenses
+
+Each section follows the license of its corresponding domain, stated in the
+`.. SPDX-License-Identifier:` line at the top of every file:
+
+- `hardware/` carries **`CC-BY-SA-4.0`**, matching `docsClean/`.
+- `linux-driver/` carries **`GPL-2.0-only`**, matching the Linux kernel.
+- `firmware/` (and the Sphinx configuration/index files) carries **`GPL-3.0-or-later`**, matching the project `LICENSE`.
+
+## Building
+
+Requirements: `python3` with `venv` and network access on the first build.
+Sphinx and the [Read the Docs theme](https://sphinx-rtd-theme.readthedocs.io/)
+with the [dark mode toggle](https://github.com/MrDogeBro/sphinx_rtd_dark_mode)
+are installed into `docs/.venv/` the first time.
+
+```sh
+cd docs
+make            # HTML (default)  -> docs/_build/html/index.html
+make html       # same
+make serve      # build and serve on http://127.0.0.1:8765
+make clean      # remove _build/
+make distclean  # also remove .venv/
 ```
 
-Expected kernel log:
+`_build/` and `.venv/` are ignored by git (see `.gitignore`).
 
-```
-powervr cac00000.gpu: [drm] FW version v1.0 (build 1 OS)
-[drm] Initialized powervr 1.0.0 for cac00000.gpu on minor 0
-```
+## Writing
 
-## Clean-room rules followed
+- Start each new `.rst` page with its `.. SPDX-License-Identifier:` and
+  `.. Copyright (C)` lines according to its section (`hardware/`, `linux-driver/`,
+  or `firmware/`).
+- Add new pages to the `toctree` in that section's `index.rst`.
+- Cite using the link roles defined in `conf.py`:
 
-- Never read, run or disassemble the vendor firmware (`rogue_*.fw`, `rgx.fw*`), its
-  dumps or captures.
-- Never read the vendor DDK or kernel driver sources, or proprietary headers.
-- Never use dirty-team material outside `docsClean/`.
-- Never modify `docsClean/`. Gaps become questions in [questions.md](questions.md),
-  or experiments on our own firmware in [logRefs/](logRefs/).
+  | Role | Example | Links to |
+  |---|---|---|
+  | `:dc:` | ``:dc:`boot-gpu-init` `` | `docsClean/boot-gpu-init.md` at the pinned submodule commit |
+  | `:dc:` with title | ``:dc:`docsClean/ <README>` `` | submodule root at the pinned commit |
+  | `:exp:` | ``:exp:`E013` `` | `docs/logRefs/E013-*.md` (warns if missing) |
+  | `:lr:` | ``:lr:`data/survey-0-2000.txt` `` | file or directory under `docs/logRefs/` on `main` |
+
+## Publishing (GitHub Pages)
+
+`.github/workflows/docs.yml` builds the HTML with warnings treated as errors
+(`sphinx-build -W --keep-going`) on every push to `main` that touches `docs/`
+or the workflow, and deploys it with GitHub Pages. Pull requests build and
+check without deploying.
