@@ -19,6 +19,7 @@ docs/
 ├── firmware/            clean-room GPLv3 firmware implementation
 ├── logRefs/             experiment log (E001…) and raw dumps in logRefs/data/
 ├── questions.md         questions for the clean-room spec maintainer (dirty team)
+├── steps.md             roadmap: the remaining steps to finish the firmware
 ├── conf.py              Sphinx configuration (Read the Docs theme + dark mode)
 ├── Makefile             build entry points
 └── requirements.txt     Python packages for the build (Sphinx, RTD theme, dark mode)
