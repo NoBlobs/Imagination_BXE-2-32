@@ -15,6 +15,21 @@ dependency order. Each step gives:
 Written against `docsClean` `2d4b018` ("General improvements"). Clean-room rules are
 unchanged: sources are `docsClean/` and our own experiments only.
 
+## Progress (E041, 2026-11-26)
+
+| Phase | State |
+|---|---|
+| 1 | `0x40A8`, `geom_caches_need_zeroing` (SLC flush only), PM slot tracking with store-before-evict and a dirty flag done. **TPC flush missing (Q19b)**: the input-attachment case still faults, and **the second render on a device stalls the TA (Q29)**. Shared-PB stays off. |
+| 2 | **Done**: rendering runs by default (`EXP_NO_RENDER` to disable), bring-up knobs removed. Stage C run stage by stage: all pass except `copy_and_blit` 19/23 (NPOT, Q25). Stage B: `xfer`, `pre-cdm` pass; `pre-3d`/`pre-ta` blocked on Q29. The interleaved-context board hang is fixed. |
+| 3 | Non-first kicks, `owner_geom`, HWRTData states done; no workload exercising them yet. |
+| 4 | Ready pages, grow request/update, partial-render arming and `FRAG_PR` written. The ready-pages update matches the reference, but **the TA does not resume (Q28)**, so grow/PR are untested. ZS backing not done. |
+| 5 | Reconstruction request, HWRTData `HWR` state, PM reset on HWR done; not exercised yet. |
+| 6 | BIF/PM state reset at `POW_OFF`, `kick_init()` at boot; barriers already in place. Stage D passes. |
+| 7 | Blocked on Q27; version stays 1.0. |
+| 8 | Not started (optional). |
+| 9 | Trace argument check done; others open. |
+| 10 | `fw-preflight.py`, `oracle.sh`, `check-trace-args.py` done; full oracle pending. |
+
 ---
 
 ## 0. Where we are

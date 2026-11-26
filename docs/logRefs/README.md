@@ -59,5 +59,6 @@ is never run, read or disassembled, and no dirty-team material is used.
 | [E038](E038-zls-mem-free-and-depth.md) | 2026-11-10 | Q16l: ZLS, MSAA words, `0x0F28`, `0x0C68`, `PM_3D_MEM_FREE` | `basic_draw` 203/331 with 0 fails; depth works; our IRQ task was clearing `PM_3D_MEM_FREE`; input-attachment renders fault (Q16m) |
 | [E039](E039-input-attachment-diff.md) | 2026-11-10 | Input-attachment render diff (Q16m) | bases match; `0x0F18` stays `isp_mtile_size`; non-first kicks skip the PM load; shared-PB mode is the next lead |
 | [E040](E040-input-attachment-dump-diff.md) | 2026-11-10 | Diff against the reference dump | dumped ranges now match; shared-PB rule; still faults; **board hang** during `basic_draw` (Q16n) |
+| [E041](E041-render-default-and-spm.md) | 2026-11-26 | Rendering by default, PM module, SPM, tools (16 GB board) | `basic_draw` 203/0, smoke 8/8 on the default build; oracle stage by stage (C all pass but NPOT copies, D, B `xfer`/`pre-cdm` pass); OOM ready-pages update matches the reference but the TA does not resume (Q28); interleaved-context board hang fixed (PM store before evict, dirty flag); the second render on a device stalls the TA (Q29) |
 
 The raw data is in [data/](data/).

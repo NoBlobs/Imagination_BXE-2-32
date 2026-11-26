@@ -8,6 +8,8 @@
  */
 #include "fw.h"
 #include "mips.h"
+#include "kick.h"
+#include "pm.h"
 
 /* internal "pow flags" (only printed in the trace) */
 #define PF_OFF_PENDING   0x10000u
@@ -39,6 +41,14 @@ static void gpu_teardown(void)
 	TRACE(SFID_MAIN_144);
 	/* no dynamic MIPS mapping must survive into the next boot */
 	tlb_flush_dynamic();
+	/*
+	 * The power-off loses the BIF catalogue and PM registers: forget which
+	 * slot holds which page catalogue and what the PM contexts hold
+	 * (data-masters.md: the slot table is walked at POW_OFF).
+	 */
+	kick_init();
+	pm_invalidate();
+	spm_reset();
 }
 
 void pow_handle(const struct kccb_cmd *cmd)

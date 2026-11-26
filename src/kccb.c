@@ -3,6 +3,7 @@
 /* Kernel CCB (host -> firmware) and Firmware CCB (firmware -> host). */
 #include "fw.h"
 #include "mips.h"
+#include "pm.h"
 
 static void clock_change(void)
 {
@@ -82,7 +83,12 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 	case KCCB_HEALTH_CHECK:
 	case KCCB_BP:
 	case KCCB_FREELIST_GROW_UPDATE:
+		spm_grow_update(cmd->data.grow.freelist_fw_addr, cmd->data.grow.delta_pages,
+				cmd->data.grow.new_pages, cmd->data.grow.ready_pages);
+		sched_run();
+		break;
 	case KCCB_FREELISTS_RECONSTRUCTION_UPDATE:
+		/* the host rebuilt the free lists and reset their HWRTData (pvr_free_list.c) */
 	case KCCB_ZSBUFFER_BACKING_UPDATE:
 	case KCCB_ZSBUFFER_UNBACKING_UPDATE:
 	case KCCB_NOTIFY_WRITE_OFFSET_UPDATE:

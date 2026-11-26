@@ -18,7 +18,7 @@ CFLAGS  := $(TARGET) -std=c23 -O2 -g -ffreestanding -fno-builtin -fno-pic -mno-a
            -Wno-unused-parameter -Iinclude $(EXP)
 ASFLAGS := $(TARGET) -fno-pic -mno-abicalls -G0 -Iinclude -D__ASSEMBLER__
 
-SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c gpu_init.c hwr.c stats.c geom.c frag.c
+SRCS_C  := main.c util.c kccb.c power.c mmu.c sched.c kick.c gpu_init.c hwr.c stats.c geom.c frag.c pm.c
 SRCS_S  := boot.S vectors.S
 OBJS    := $(addprefix $(BUILD)/obj/,$(SRCS_S:.S=.o) $(SRCS_C:.c=.o))
 
@@ -34,6 +34,7 @@ $(BUILD)/obj/%.o: %.S include/*.h Makefile | $(BUILD)/obj
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) fw.ld
+	python3 $(TOOLS)/check-trace-args.py include/sfid.h $(SRCS_C)
 	$(TOOLS)/ld-wrap.sh $(LD) -T fw.ld --no-check-sections --noinhibit-exec -o $@ $(OBJS)
 	$(OBJDUMP) -d --mattr=+micromips $@ > $(BUILD)/fw.dis
 

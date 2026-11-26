@@ -129,6 +129,7 @@ uint32_t sched_cleanup(uint32_t type, fwaddr_t addr);
 void sched_run(void);
 void sched_irq(uint32_t events);
 void sched_force_update(fwaddr_t ctx, uint32_t fence_offset);
+void sched_ufo_signal(const struct ufo *u);
 
 /* GPU bring-up (gpu_init.c) */
 void gpu_power_on(void);

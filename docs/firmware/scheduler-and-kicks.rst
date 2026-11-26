@@ -169,10 +169,11 @@ Follows the transfer table in :dc:`kick-compute-and-3d` (verified in
 4. Completion: ``PIXELBE_END_RENDER``, per-DM cache flush and trace
    ``MAIN_4``.
 
-Experimental geometry and fragment kicks (``-DEXP_TA``)
-=======================================================
+Geometry and fragment kicks
+===========================
 
-Enabled with ``make -C src -B EXP="-DEXP_TA"`` (:exp:`E027`–:exp:`E040`):
+On by default since :exp:`E041` (``-DEXP_NO_RENDER`` retires them unrun, the
+old behaviour); developed in :exp:`E027`–:exp:`E041`:
 
 * **Geometry** (``src/geom.c``): loads PM context 0 (local/global free-list
   staging registers + load commands ``0x0208``/``0x20B0``, ALIST/MLIST SP
@@ -189,3 +190,17 @@ Enabled with ``make -C src -B EXP="-DEXP_TA"`` (:exp:`E027`–:exp:`E040`):
   words ``0x0FA0``/``0x0FA8``, ISP and PBE banks, launches via
   ``ISP_RENDER`` + ``0x0F00 = 1``, waits for ``PIXELBE_END_RENDER`` and
   ``PM_3D_MEM_FREE`` (:exp:`E038`), and writes back updated free-list counts.
+* **PM contexts** (``src/pm.c``, :exp:`E041`): ``pm_slots[]`` records which
+  HWRTData and free lists each PM context holds. Before another HWRTData is
+  loaded into a context, its live free-list state is stored back
+  (``pm_slot_evict``), but only while the context is *dirty*: the fragment
+  load (context 0) and the end of the fragment (context 1) already store it.
+  Without the store, two render contexts that interleave hung the SoC;
+  without the dirty flag, a stale store overwrote the freed pages. Every load
+  and store emits the reference's ``Load Freelist`` / ``Store Freelist``
+  trace lines.
+* **Out-of-memory** (``src/pm.c``, :exp:`E041`): ``PM_OUT_OF_MEMORY`` while
+  the geometry runs adds ready pages inside a ``PM_PAGE_MANAGEOP`` pause,
+  requests a grow (FWCCB ``FREELIST_GROW``), or arms a partial render
+  (``FRAG_PR``). The TA does not resume yet (Q28).
+* **Known gap**: the second render on a device stalls the TA (Q29).

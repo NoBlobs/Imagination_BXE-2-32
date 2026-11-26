@@ -52,13 +52,18 @@ Source files (``src/``)
        (``TQ_3D``) kick, completion events, per-DM cache flush and MMU fault
        reporting.
    * - ``src/geom.c``
-     - Experimental geometry (``TA``) kick (``-DEXP_TA``, :exp:`E028`–:exp:`E040`):
-       PM context 0 load, geometry registers, context enable, VDM trigger
-       and completion write-back.
+     - Geometry (``TA``) kick, on by default since :exp:`E041`
+       (:exp:`E028`–:exp:`E041`): PM context 0 load, geometry registers,
+       context enable, VDM trigger and completion write-back.
    * - ``src/frag.c``
-     - Experimental fragment (``3D``) kick (``-DEXP_TA``, :exp:`E036`–:exp:`E040`):
+     - Fragment (``3D``) kick and partial render (:exp:`E036`–:exp:`E041`):
        PM context 1 load, ZLS/MSAA/ISP/PBE registers, render launch and
        ``PM_3D_MEM_FREE`` completion handling.
+   * - ``src/pm.c``
+     - Parameter Manager (:exp:`E041`): free-list and list loads/stores of
+       both PM contexts, which HWRTData each context holds (store before
+       evict, dirty flag), out-of-memory handling (ready pages, grow,
+       partial render) and the HWR free-list reconstruction request.
    * - ``src/stats.c``
      - GPU utilisation (``gpu_util_fwcb``), time correlation, HWR log
        (``hwrinfobuf``) and FWCCB context-reset notification.

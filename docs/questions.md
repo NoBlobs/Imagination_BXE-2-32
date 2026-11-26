@@ -28,6 +28,103 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q29 — Why does the second render on a device stall the TA? (blocking for every app that draws more than once)
+
+[E041](logRefs/E041-render-default-and-spm.md), `vkfwtest pre-3d`. One device draws the same
+quad several times, and Mesa alternates the two HWRTData of the render-target dataset.
+
+Render 1 (HWRTData 0) works:
+- `Load Freelist` local `SP 0x1f`, global `0x1bf`;
+- `TA finished`, the 3D, `PM_3D_MEM_FREE`;
+- `Store Freelist` back to `0x1f`/`0x1bf`.
+
+Render 2 (HWRTData 1) loads **exactly the same free-list values**:
+- `CONTEXT_PB_BASE = 3`;
+- both free lists reloaded;
+- list SPs and catalogues from 0;
+- `0x0C38`/`0x0C40`/`0x0408` from HWRTData 1 and its command.
+
+The TA then takes 21 local pages and stops:
+- `0x0D00 = 0x0F`;
+- no `PM_OUT_OF_MEMORY`;
+- lockup after 30 s.
+
+From then on **every** geometry kick stalls, also:
+- on HWRTData 0 again;
+- on another device's first render;
+- after the GPU was powered off and on between the renders.
+
+`basic_draw` (one render per device) passes 203/331.
+
+1. What does the reference do at `TA finished` and before the next first geometry kick
+   that we do not do? In particular the **TPC flush** (Q19b item 1): register, value, poll,
+   and whether it runs at every `TA finished`.
+2. Does the reference write anything to memory between two renders: TPC contents,
+   region headers, the RTC, `rtc_dev_addr` / `macrotile_array_dev_addr`, HWRTData fields?
+3. In `pre-3d` on the reference, the trace lines from `TA finished` of render 1 to
+   `Kick TA` of render 2, with the register writes in between (same sampling as the
+   Q16m answer).
+4. For render 2 the reference may print `CONTEXT_PB_BASE set to 0x0` (shared free lists,
+   as for the second HWRTData of a render pass). Is a reload with `0x3` and identical
+   values expected to work?
+
+#### Q28 — What resumes the TA after an out-of-memory event? (blocking for big scenes)
+
+[E041](logRefs/E041-render-default-and-spm.md) implements the out-of-memory paths of
+`partial-render-spm.md`. On `vkfwtest bigpb`:
+- the first `PM_OUT_OF_MEMORY` is handled exactly like the reference:
+  - `0x02A0 = 1`, poll `0x02A8` = 1;
+  - global bank `0x20B8` base `…48900` → `…48800`, `+0x08` = live + 64, then the load
+    command `0x20B0`, so the live `0x20C8` goes 7 → `0x47`;
+  - `0x02A0 = 0`, poll `0x02A8` = 0;
+- trace: `Freelist update completed … old 0x1c0, new 0x200`, then
+  `OOM: Resumed TA with ready pages … SP : 71`.
+
+But **the TA never resumes**. Until the 30 s deadline:
+- the live global SP stays `0x47`;
+- the local live SP stays 2;
+- `0x0D00` = 1;
+- no further `PM_OUT_OF_MEMORY` is raised.
+
+These made no difference:
+- clearing `PM_OUT_OF_MEMORY` again after the update;
+- writing the TA run register `0x0400 = 1` again.
+
+The host's `FREELIST_GROW` and `FREELIST_GROW_UPDATE` round trip works, and the grown
+pages are held for the next out-of-memory event.
+
+1. After the free-list update at an out-of-memory event, which register write (likely a
+   self-clearing command, like the load commands) makes the PM and TA continue? In
+   which order relative to the pause and unpause?
+2. Is it the same step after a grow update that the geometry waited for (`SPM State =
+   wait for grow` → `Resume TA without partial render`)?
+3. When `PM_OUT_OF_MEMORY` is raised, does the firmware read any register to learn
+   which free list ran out (local or global), or does it always extend the global one?
+
+#### Q27 — What does firmware 1.1 change for render-target arrays (`gs_rta_support`)?
+
+Mesa MR 40973 enables `gs_rta_support` only for firmware 1.1 or later, and the acceptance
+oracle expects `FW version v1.1`. We keep reporting 1.0 until we implement what 1.1
+changes. In the same form as the other answers:
+1. how the geometry and fragment kicks use `rogue_fwif_hwrtdata.rta_ctl`,
+   `rgnhdr_single_rt_size`, `rgnhdr_scratch_offset`, `zls_stride` and `sls_stride`;
+2. per-layer region headers and PBE addressing, if the firmware takes part in them;
+3. any other firmware-visible difference between the v1.0 and v1.1 open images.
+
+#### Q19b — The TPC flush and the full geometry completion flush
+
+The spec says geometry completion "flushes the TPC". Our geometry variant of the completion
+flush is only `0x4000 = 1`, `0x0688 = 1` (poll), `0x0668 = 5` (poll), SLC `DM_TA`. The second
+HWRTData of an input-attachment render pass shares the TPC with the first, and its fragment
+still faults on an IPF read at `0x2000` ([E040](logRefs/E040-input-attachment-dump-diff.md),
+E041).
+1. Which register and value flush the TPC, and when (TA completion, or before the
+   fragment kick of the next HWRTData)?
+2. The full geometry variant of the completion flush, in the same form as the
+   fragment/compute table of `kick-compute-and-3d.md`.
+3. Phase D: which registers clear the RTC and TA caches when
+   `geom_caches_need_zeroing` is set?
+
 #### Q16n — Input-attachment render: state outside the dumped ranges
 
 Our second render now matches `input-attachment-dump.md` in every dumped range

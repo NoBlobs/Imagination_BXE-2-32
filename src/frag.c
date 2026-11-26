@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
 /*
- * Fragment (3D) kick of a render: docsClean/kick-compute-and-3d.md "Fragment
- * kick" plus the PM context 1 load of docsClean/kick-geometry-ta.md phase B
- * step 3, with the free-list load commands found in E035.  Experimental:
- * reached only with -DEXP_TA (E036).
+ * Fragment (3D) kick of a render, and of a partial render (FRAG_PR).
+ *
+ * Sources: docsClean/kick-compute-and-3d.md ("Fragment kick", "Observed during
+ * the render", "Input-attachment renders"), kick-geometry-ta.md phase B step 3
+ * and the OOM/PR register changes (Q16m), partial-render-spm.md, the public
+ * rogue_fwif_frag_regs layout; experiments E035-E040.
  */
 #include "kick.h"
+#include "pm.h"
 
-/* rogue_fwif_cmd_frag (public layout) */
-#define FRAG_HWRT                4      /* cmd_shared.hwrt_data_fw_addr */
-#define FRAG_REGS                16
-#define FRAG_FLAGS               464
+/* rogue_fwif_cmd_frag (payload offsets, command-structs.md) */
+#define FRAG_HWRT                0x04
+#define FRAG_REGS                0x10
+#define FRAG_FLAGS               0x1D0
 /* rogue_fwif_frag_regs, relative to FRAG_REGS */
 #define FR_USC_PIXEL_OUTPUT      0
 #define FR_USC_CLEAR             4
@@ -30,66 +33,26 @@
 #define FR_PBE_WORD              152    /* [8][3] u64 */
 #define FR_TPU_BORDER            344
 #define FR_PDS_BGND              352    /* [3] u64 */
+#define FR_PDS_PR_BGND           400    /* [3] u64, partial render */
+/* rogue_fwif_hwrtdata_common */
+#define COMMON_SCREEN_PIXEL_MAX  0x04
+#define COMMON_MSCTL             0x08
+#define COMMON_MSCTL_FLIPPED     0x10
+#define COMMON_MTILE_STRIDE      0x24
+#define COMMON_ISP_MTILE_SIZE    0x50
 
-/* rogue_fwif_hwrtdata / _common / freelist (public layouts) */
-#define HWRT_PM_MLIST_DEV_ADDR   0
-#define HWRT_VCE_LAST_CAT_BASE   40
-#define HWRT_TE_LAST_CAT_BASE    104
-#define HWRT_ALIST_LAST_CAT_BASE 144
-#define HWRT_ALIST_SP            152
-#define HWRT_MLIST_SP            160
-#define HWRT_COMMON_FW_ADDR      164
-#define HWRT_STATE               172
-#define HWRT_FREELISTS           176
-#define HWRT_RGN_HEADER          256
-#define COMMON_SCREEN_PIXEL_MAX  4
-#define COMMON_MSCTL             8
-#define COMMON_MSCTL_FLIPPED     16
-#define COMMON_MTILE_STRIDE      36
-#define COMMON_ISP_MTILE_SIZE    80
-#define FL_CURRENT_DEV_ADDR      8
-#define FL_STACK_TOP             16
-#define FL_ALLOC_PAGES           32
-#define FL_ALLOC_MMU_PAGES       36
-
-#define RTDATA_STATE_KICK_FRAG       4
-#define RTDATA_STATE_FRAG_FINISHED   5
-
-/* PM context 1 (fragment) */
-#define CR_PM_FL_LOAD_LOCAL1     0x0200
-#define CR_PM_FL_BASE_LOCAL1     0x0218
-#define CR_PM_FL_TOP_LOCAL1      0x0230  /* 64-bit, stack top from bit 22 (E035) */
-#define CR_PM_FL_CNT_LOCAL1      0x0398
-#define CR_PM_FL_LOAD_GLOBAL1    0x20A8
-#define CR_PM_FL_BANK_GLOBAL1    0x2078
-#define CR_PM_LIVE_SP_LOCAL0     0x0348
-#define CR_PM_LIVE_PB_LOCAL0     0x03A0  /* live local counts (Q16k): PB ctx0 / ctx1 0x03A8 */
-#define CR_PM_LIVE_PB_LOCAL1     0x03A8
-#define CR_PM_LIVE_MMU_LOCAL0    0x2000  /* MMU ctx0 / ctx1 0x2008 */
-#define CR_PM_LIVE_MMU_LOCAL1    0x2008
-#define EV_PM_3D_MEM_FREE        (1u << 8)
-#ifndef EXP_MEM_FREE_US
-#define EXP_MEM_FREE_US          3000
-#endif
-#define CR_PM_LIVE_SP_LOCAL1     0x0350
-#define CR_PM_LIVE_SP_GLOBAL0    0x20C8
-#define CR_PM_LIVE_SP_GLOBAL1    0x2088
-#define CR_PM_LIVE_ALLOC_GLOBAL0 0x20D8  /* +0x20 / +0x28 of the bank */
-#define CR_PM_LIVE_ALLOC_GLOBAL1 0x2098
+/* PM, fragment side */
 #define CR_PM_CONTEXT_PB_BASE    0x02B0
-#define CR_PM_MLIST1_BASE        0x02E0
-#define CR_PM_ALIST_SP_LOAD      0x0278
-#define CR_PM_MLIST_SP_LOAD      0x02C8
-#define CR_BIF_PM_CAT_BASE_VCE1  0x1268
-#define CR_BIF_PM_CAT_BASE_TE1   0x1270
-#define CR_BIF_PM_CAT_BASE_ALIST1 0x1280
+#define CR_PM_ALIST_SP_LIVE0     0x0270
+#define CR_PM_MLIST_SP_LIVE0     0x02C0
+#define CR_PM_0388               0x0388   /* 1 during a render, a transfer clears it (Q16k) */
 
 /* 3D pipe (kick-compute-and-3d.md "Fragment kick", phases A-F) */
 #define CR_FRAG_CTRL_COMMON      0xF310
 #define CR_USC_PIXEL_OUTPUT      0x4070
 #define CR_USC_CLEAR0            0x4078
 #define CR_VIEW_IDX              0x40A0
-#define CR_ISP_MTILE_BASE        0x0F20  /* region headers */
+#define CR_ISP_MTILE_BASE        0x0F20   /* region headers */
 #define CR_FRAG_SCREEN           0x3E40
 #define CR_ISP_MTILE_SIZE        0x0F18
 #define CR_ISP_RGN               0x0F28
@@ -100,14 +63,15 @@
 #define CR_ISP_AA                0x0F30
 #define CR_ISP_CTL               0x0F38
 #define CR_ISP_TILES_IN_FLIGHT   0x0FD8
-#define CR_ZS_PAIR               0x0FA8  /* flipped multisample control (Q16l) */
 #define CR_ISP_MSCTL             0x0FA0
+#define CR_ISP_MSCTL_FLIPPED     0x0FA8
 #define CR_ISP_ZLSCTL            0x0F48
 #define CR_ISP_ZLOAD_BASE        0x0F50
 #define CR_ISP_ZSTORE_BASE       0x0F58
 #define CR_ISP_STENCIL_LOAD_BASE 0x0F60
 #define CR_ISP_STENCIL_STORE_BASE 0x0F68
 #define CR_TPU_BORDER            0x17A0
+#define CR_TPU_BORDER_PIXEL      0x1790   /* same table during the reference's renders (E040) */
 #define CR_PDS_BGRND0_BASE       0x06A0
 #define CR_PDS_BGRND1_BASE       0x06A8
 #define CR_PDS_BGRND3_SIZEINFO   0x06B8
@@ -123,6 +87,10 @@
 #define CR_3D_01C8               0x01C8
 #define CR_PIXEL_LAUNCH          0x0F00
 
+#ifndef EXP_MEM_FREE_US
+#define EXP_MEM_FREE_US          3000     /* the spec saw 0.4-2.5 ms */
+#endif
+
 static inline uint64_t rd64(const uint8_t *p, uint32_t off)
 {
 	return *(const uint64_t *)(p + off);
@@ -133,128 +101,88 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
 	return *(const uint32_t *)(p + off);
 }
 
-static inline void wr32(const uint8_t *p, uint32_t off, uint32_t v)
-{
-	*(uint32_t *)(uintptr_t)(p + off) = v;
-}
+static bool frag_is_pr;         /* the fragment DM runs a partial render */
 
-fwaddr_t pm_ctx1_fl[2];
-
-/* E035: value registers first, then the load command, wait for bit 0 = 0 */
-static bool pm_load_cmd(uint32_t reg)
+void frag_hwr_reset(void)
 {
-	cr_write32(reg, 1);
-	return cr_poll32(reg, 1, 0, 10000);
+	frag_is_pr = false;
 }
 
 /*
- * Phase B step 3: store the free lists from PM context 0 (geometry), then load
- * them into PM context 1 (fragment), with the geometry's lists and catalogues.
+ * Phase B step 3 of a normal render: store the free lists from PM context 0
+ * (the state the geometry left), then load them, the geometry's lists and its
+ * catalogues into PM context 1.
  */
-static void frag_pm_load(const uint8_t *hwrt, const uint8_t *fl_local, const uint8_t *fl_global)
+static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 {
-	bool ok_l, ok_g = true;
+	struct pm_freelist *fl[2] = {
+		hwrt_freelist(hwrt, PM_FL_LOCAL), hwrt_freelist(hwrt, PM_FL_GLOBAL),
+	};
+	bool ok[2] = { true, true };
 
-	/* store from PM context 0: the stack tops the geometry left */
-	wr32(fl_local, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_LOCAL0));
-	wr32(fl_local, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_PB_LOCAL0));
-	wr32(fl_local, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_MMU_LOCAL0));
-	if (fl_global) {
-		wr32(fl_global, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_GLOBAL0));
-		wr32(fl_global, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL0));
-		wr32(fl_global, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL0 + 8));
+	/* the geometry's state is still in PM context 0 only if it holds this HWRTData */
+	if (pm_slots[PM_CTX_GEOM].dirty && pm_slots[PM_CTX_GEOM].hwrt == hwrt_fw) {
+		for (uint32_t w = 0; w < 2; w++)
+			if (fl[w])
+				pm_store_freelist(PM_CTX_GEOM, w, fl[w]);
+		pm_slot_stored(PM_CTX_GEOM);
 	}
+	pm_slot_evict(PM_CTX_FRAG, hwrt_fw);
 
-#ifndef EXP_FLAGS_AFTER_SP
-	/* fragment-load flags (Q16h): bit 16 / bit 8 */
-	cr_write32(0x03D0, cr_read32(0x03D0) | 0x10000u);
-	cr_write32(0x03D4, cr_read32(0x03D4) | 0x100u);
-#endif
+	pm_select(PM_CTX_FRAG);
+	pm_load_lists(PM_CTX_FRAG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
+		      rd64(hwrt, HWRT_VCE_LAST_CAT_BASE), rd64(hwrt, HWRT_TE_LAST_CAT_BASE),
+		      rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE), rd64(hwrt, HWRT_ALIST_SP),
+		      rd32(hwrt, HWRT_MLIST_SP));
+	for (uint32_t w = 0; w < 2; w++)
+		if (fl[w])
+			ok[w] = pm_load_freelist(PM_CTX_FRAG, w, fl[w]);
+	cr_write32(CR_PM_CONTEXT_PB_BASE, 0);   /* same free lists as the TA */
+	pm_slot_set(PM_CTX_FRAG, hwrt_fw);
+	TRACE(SFID_RTD_12, 1u, 1u, (uint32_t)rd32(hwrt, HWRT_MLIST_SP),
+	      (uint32_t)(rd64(hwrt, HWRT_ALIST_SP) >> 32), (uint32_t)rd64(hwrt, HWRT_ALIST_SP));
+	if (!ok[0] || !ok[1])
+		TRACE(SFID_DBG_4, 0xE0410B60u, ok[0], ok[1]);
+}
 
-	/*
-	 * E037: the geometry's lists, page catalogues and ALIST/MLIST SPs go in
-	 * before the load commands; in the original the loaded 0x0278/0x02C8 and
-	 * the live 0x0280/0x02D0 change in the same sample (Q16k answer).
-	 */
-	cr_write64(CR_PM_MLIST1_BASE, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR));
-	cr_write64(CR_BIF_PM_CAT_BASE_VCE1, rd64(hwrt, HWRT_VCE_LAST_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_TE1, rd64(hwrt, HWRT_TE_LAST_CAT_BASE));
-	cr_write64(CR_BIF_PM_CAT_BASE_ALIST1, rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE));
-	cr_write64(CR_PM_ALIST_SP_LOAD, rd64(hwrt, HWRT_ALIST_SP));
-	cr_write32(CR_PM_MLIST_SP_LOAD, rd32(hwrt, HWRT_MLIST_SP));
-#ifndef EXP_SP_LOAD_CMD
-#define EXP_SP_LOAD_CMD 0x0288    /* ALIST SP load command (E037) */
-#endif
-#ifndef EXP_SP_LOAD_CMD2
-#define EXP_SP_LOAD_CMD2 0x0190   /* MLIST SP load command (E037) */
-#endif
-#if EXP_SP_LOAD_CMD
-	/* E037: candidate ALIST/MLIST SP load command of PM context 1 (Q16k list) */
-	{
-		bool ok = pm_load_cmd(EXP_SP_LOAD_CMD);
-
-		TRACE(SFID_DBG_5, 0xE0370B02u, ok, cr_read32(0x0280), cr_read32(0x02D0));
-	}
-#endif
-#if EXP_SP_LOAD_CMD2
-	{
-		bool ok = pm_load_cmd(EXP_SP_LOAD_CMD2);
-
-		TRACE(SFID_DBG_5, 0xE0370B03u, ok, cr_read32(0x0280), cr_read32(0x02D0));
-	}
-#endif
-#ifdef EXP_FLAGS_AFTER_SP
-	/* E037: the flag bits as the trigger of the ALIST/MLIST SP copy */
-	cr_write32(0x03D0, cr_read32(0x03D0) | 0x10000u);
-	cr_write32(0x03D4, cr_read32(0x03D4) | 0x100u);
-	TRACE(SFID_DBG_4, 0xE0370B01u, cr_read32(0x0280), cr_read32(0x02D0));
-#endif
-
-	/* local free list, PM context 1 */
-	cr_write64(CR_PM_FL_BASE_LOCAL1, rd64(fl_local, FL_CURRENT_DEV_ADDR));
-	cr_write64(CR_PM_FL_TOP_LOCAL1, (uint64_t)rd32(fl_local, FL_STACK_TOP) << 22);
-	cr_write32(CR_PM_FL_CNT_LOCAL1, rd32(fl_local, FL_ALLOC_PAGES));
-	cr_write32(CR_PM_FL_CNT_LOCAL1 + 4, rd32(fl_local, FL_ALLOC_MMU_PAGES));
-	ok_l = pm_load_cmd(CR_PM_FL_LOAD_LOCAL1);
-
-	/* global free list, PM context 1 (bank 0x2078) */
-	if (fl_global) {
-		cr_write64(CR_PM_FL_BANK_GLOBAL1, rd64(fl_global, FL_CURRENT_DEV_ADDR));
-		cr_write64(CR_PM_FL_BANK_GLOBAL1 + 0x08, rd32(fl_global, FL_STACK_TOP));
-		cr_write32(CR_PM_FL_BANK_GLOBAL1 + 0x18, rd32(fl_global, FL_ALLOC_PAGES));
-		cr_write32(CR_PM_FL_BANK_GLOBAL1 + 0x1C, rd32(fl_global, FL_ALLOC_MMU_PAGES));
-		ok_g = pm_load_cmd(CR_PM_FL_LOAD_GLOBAL1);
-	}
-	pm_ctx1_fl[0] = rd32(hwrt, HWRT_FREELISTS);
-	pm_ctx1_fl[1] = rd32(hwrt, HWRT_FREELISTS + 4);
-	/* CONTEXT_PB_BASE = 0 at the fragment load (same free lists as the TA) */
-	cr_write32(CR_PM_CONTEXT_PB_BASE, 0);
-
-
-	TRACE(SFID_DBG_8, 0xE0360B00u, ok_l, ok_g, cr_read32(CR_PM_LIVE_SP_LOCAL1),
-	      cr_read32(CR_PM_LIVE_SP_GLOBAL1), cr_read32(0x0280), cr_read32(0x02D0));
+/*
+ * Partial render (Q16m answer): context 1 takes the geometry's *current*
+ * catalogues and list stack pointers; the free lists are shared, not
+ * reloaded; then PM_PARTIAL_RENDER_ENABLE = 1.
+ */
+static void frag_pm_load_pr(const uint8_t *hwrt)
+{
+	pm_select(PM_CTX_FRAG);
+	pm_load_lists(PM_CTX_FRAG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
+		      cr_read64(CR_BIF_PM_CAT_BASE_VCE0), cr_read64(CR_BIF_PM_CAT_BASE_TE0),
+		      cr_read64(CR_BIF_PM_CAT_BASE_ALIST0), cr_read32(CR_PM_ALIST_SP_LIVE0),
+		      cr_read32(CR_PM_MLIST_SP_LIVE0));
+	cr_write32(CR_PM_PARTIAL_RENDER_ENABLE, 1);
 }
 
 bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
-	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
+	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off,
+	       bool partial)
 {
 	const uint8_t *cmd = payload;
 	const uint8_t *r = cmd + FRAG_REGS;
-	const uint8_t *hwrt = fwptr(rd32(cmd, FRAG_HWRT));
+	fwaddr_t hwrt_fw = rd32(cmd, FRAG_HWRT);
+	const uint8_t *hwrt = fwptr(hwrt_fw);
 	const uint8_t *common = hwrt ? fwptr(rd32(hwrt, HWRT_COMMON_FW_ADDR)) : NULL;
-	const uint8_t *fl_local = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS)) : NULL;
-	const uint8_t *fl_global = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS + 4)) : NULL;
 	uint32_t slot, isp_ctl, tif;
 
-	if (!hwrt || !common || !fl_local)
+	if (!hwrt || !common || !hwrt_freelist(hwrt, PM_FL_LOCAL))
 		return false;
 
 	/* A. preconditions */
 	bcast_write32(CR_FRAG_CTRL_COMMON, 1);          /* single core */
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_FRAG);
 	bif_set_index(DM_FRAG, slot);
-	frag_pm_load(hwrt, fl_local, fl_global);
-	bcast_write32(0x0388, 1);       /* a transfer clears it; the 3D kick sets it back (Q16k) */
+	if (partial)
+		frag_pm_load_pr(hwrt);
+	else
+		frag_pm_load(hwrt_fw, hwrt);
+	bcast_write32(CR_PM_0388, 1);
 
 	/* B. ISP configuration */
 	bcast_write32(CR_USC_PIXEL_OUTPUT, rd32(r, FR_USC_PIXEL_OUTPUT));
@@ -263,53 +191,37 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_VIEW_IDX, rd32(r, FR_VIEW_IDX) & 0xFF);
 	bcast_write64(CR_ISP_MTILE_BASE, rd64(hwrt, HWRT_RGN_HEADER));
 	bcast_write32(CR_FRAG_SCREEN, rd32(common, COMMON_SCREEN_PIXEL_MAX));
-#ifndef EXP_MTILE_STRIDE
+	/* isp_mtile_size; mtile_stride in both halves breaks every render (E039) */
 	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_ISP_MTILE_SIZE));
-#else
-	/* E039: mtile_stride in x and y, as the spec's sampling suggests: breaks every render */
-	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_MTILE_STRIDE) * 0x10001u);
-#endif
+	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));   /* Q16l */
 
-	/* C. ZS load/store, background, border */
+	/* C. ZS load/store (none in a partial render), background, border */
 	bcast_write64(CR_ISP_SCISSOR_BASE, rd64(r, FR_ISP_SCISSOR_BASE));
 	bcast_write64(CR_ISP_DBIAS_BASE, rd64(r, FR_ISP_DBIAS_BASE));
 	bcast_write32(CR_ISP_BGOBJDEPTH, rd32(r, FR_ISP_BGOBJDEPTH));
 	bcast_write32(CR_ISP_BGOBJVALS, rd32(r, FR_ISP_BGOBJVALS));
 	bcast_write32(CR_ISP_AA, rd32(r, FR_ISP_AA));
-	/* Q16l: 0x0FA0/0x0FA8 read 0x88 during a render = the multisample control words */
 	bcast_write64(CR_ISP_MSCTL, rd64(common, COMMON_MSCTL));
-	bcast_write64(CR_ZS_PAIR, rd64(common, COMMON_MSCTL_FLIPPED));
-	/* ZS load/store (Q16l): the field values, 0 when the buffer is absent */
-	bcast_write64(CR_ISP_ZLSCTL, rd64(r, FR_ISP_ZLSCTL));
-	bcast_write64(CR_ISP_ZLOAD_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
-	bcast_write64(CR_ISP_ZSTORE_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
-	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, rd64(r, FR_ISP_STENCIL_BASE));
-	bcast_write64(CR_ISP_STENCIL_STORE_BASE, rd64(r, FR_ISP_STENCIL_BASE));
-	/* 0x0F28 = 4 x mtile_stride (Q16l; TO CONFIRM for other sizes and MSAA) */
-	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));
+	bcast_write64(CR_ISP_MSCTL_FLIPPED, rd64(common, COMMON_MSCTL_FLIPPED));
+	bcast_write64(CR_ISP_ZLSCTL, partial ? 0 : rd64(r, FR_ISP_ZLSCTL));
+	bcast_write64(CR_ISP_ZLOAD_BASE, partial ? 0 : rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_ZSTORE_BASE, partial ? 0 : rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
+	bcast_write64(CR_ISP_STENCIL_STORE_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
 	bcast_write64(CR_TPU_BORDER, rd64(r, FR_TPU_BORDER));
-#ifdef EXP_FRAG_UNIT_EXTRA
-	/* E040: always-on values in the original's dump that ours lacks */
-	bcast_write32(0x06D0, 0x7F);
-	bcast_write32(0x0708, 1);
-	bcast_write32(0x1500, 0x80);
-	bcast_write32(0x1780, 0x21);
-	bcast_write32(0x1788, 0x20);
-	bcast_write32(0x178C, 0x20);
-	bcast_write32(0x17B8, 0xA);
-#endif
-#ifndef EXP_NO_PIXEL_BORDER
-	/* E040: 0x1790/0x1794 hold the same table during the original's renders (pixel side) */
-	bcast_write64(0x1790, rd64(r, FR_TPU_BORDER));
-#endif
-	/* not in the spec's 3D list (PENDING): as the transfer kick does */
+	bcast_write64(CR_TPU_BORDER_PIXEL, rd64(r, FR_TPU_BORDER));
+	/* not in the spec's 3D list: as the transfer kick does */
 	isp_ctl = rd32(r, FR_ISP_CTL);
 	tif = ((isp_ctl >> 12) & 0xF) + 1;
 	bcast_write32(CR_ISP_TILES_IN_FLIGHT, tif > 2 ? 2 : tif);
 	bcast_write32(CR_ISP_CTL, isp_ctl);
-	bcast_write64(CR_PDS_BGRND0_BASE, rd64(r, FR_PDS_BGND));
-	bcast_write64(CR_PDS_BGRND1_BASE, rd64(r, FR_PDS_BGND + 8));
-	bcast_write64(CR_PDS_BGRND3_SIZEINFO, rd64(r, FR_PDS_BGND + 16));
+	{
+		uint32_t bg = partial ? FR_PDS_PR_BGND : FR_PDS_BGND;
+
+		bcast_write64(CR_PDS_BGRND0_BASE, rd64(r, bg));
+		bcast_write64(CR_PDS_BGRND1_BASE, rd64(r, bg + 8));
+		bcast_write64(CR_PDS_BGRND3_SIZEINFO, rd64(r, bg + 16));
+	}
 
 	/* D. pipe reset and output */
 	bcast_write32(CR_ISP_RENDER, 0);
@@ -326,85 +238,59 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_3D_0298, 0);
 	bcast_write32(CR_3D_01C8, 0);
 
-	TRACE(SFID_DBG_8, 0xE0360C00u, rd32(r, FR_EVENT_PDS_INFO), rd32(r, FR_EVENT_PDS_DATA),
-	      isp_ctl, rd32(r, FR_ISP_AA), rd32(common, COMMON_ISP_MTILE_SIZE),
-	      rd32(cmd, FRAG_FLAGS));
-
-	TRACE(SFID_DBG_6, 0xE0390C04u, rd32(r, 440), rd32(r, 444), rd32(r, 48), rd32(r, 64));
-	TRACE(SFID_DBG_9, 0xE0390C02u, cr_read32(0x0F10), cr_read32(0x0F18), cr_read32(0x0F28),
-	      cr_read32(0x0F30), cr_read32(0x0F38), cr_read32(0x0F80), cr_read32(0x0F88));
-	TRACE(SFID_DBG_9, 0xE0390C03u, cr_read32(0x0FA0), cr_read32(0x0FA8), cr_read32(0x0FB0),
-	      cr_read32(0x0FB8), cr_read32(0x0FD8), cr_read32(0x0F08), cr_read32(0x0FC8));
-	TRACE(SFID_DBG_9, 0xE0390C01u, cr_read32(0x0F20), cr_read32(0x02E0), cr_read32(0x1268),
-	      cr_read32(0x1270), cr_read32(0x1280), cr_read32(0x0280), cr_read32(0x02D0));
-#ifdef EXP_FRAG_DUMP
-	{
-		/* E040: same ranges as docsClean/input-attachment-dump.md, non-zero only */
-		static const uint16_t rng[][2] = { { 0x0600, 0x0800 }, { 0x0F00, 0x1000 },
-						   { 0x1500, 0x17F4 }, { 0x4000, 0x40FC } };
-
-		for (uint32_t k = 0; k < 4; k++)
-			for (uint32_t o = rng[k][0]; o < rng[k][1]; o += 4) {
-				uint32_t v = cr_read32(o);
-
-				if (v && o != 0x0F00)
-					TRACE(SFID_DBG_3, 0xE0400000u | o, v);
-			}
-	}
-#endif
 	/* E. trace and state, F. trigger */
-	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, rd32(cmd, FRAG_HWRT), 0, 0, ctx->pid, ctx->priority,
-	      rd32(cmd, 0), hdr->ext_job_ref, hdr->int_job_ref);
-	wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_FRAG);
-	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER);
+	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, hwrt_fw, partial ? 1u : 0u, 0u, ctx->pid,
+	      ctx->priority, rd32(cmd, 0), hdr->ext_job_ref, hdr->int_job_ref);
+	if (!partial)
+		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_FRAG);
+	else
+		spm_pr_started();
+	frag_is_pr = partial;
+	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER | EV_PM_3D_MEM_FREE);
 	dm_start(DM_FRAG, ctxaddr, cmd_off, EV_PIXELBE_END_RENDER, SFID_MAIN_4, slot);
-	dms[DM_FRAG].hwrt = rd32(cmd, FRAG_HWRT);
-#ifdef EXP_FRAG_ISP_RENDER
-	bcast_write32(CR_ISP_RENDER, EXP_FRAG_ISP_RENDER);
-#endif
+	dms[DM_FRAG].hwrt = hwrt_fw;
 	bcast_write32(CR_PIXEL_LAUNCH, 1);              /* last write */
 	cr_write32(CR_MTS_SCHEDULE, 0);
 	return true;
 }
 
-/* Fragment completion: store the free lists back from PM context 1. */
+/*
+ * Render or partial-render completion. The PM returns the pages by itself
+ * and raises PM_3D_MEM_FREE after PIXELBE_END_RENDER (Q16k/Q16l); in a small
+ * render both arrive together, so the IRQ task may already have seen it (E038).
+ */
 void frag_done(struct dm_state *s)
 {
-	/* the PM returns the pages by itself, then raises PM_3D_MEM_FREE (Q16k) */
-	/*
-	 * E038: in a small render PM_3D_MEM_FREE follows PIXELBE_END_RENDER by
-	 * ~7 us, so the IRQ task usually saw (and cleared) both bits together.
-	 */
+	const uint8_t *hwrt = fwptr(s->hwrt);
 	bool freed = cr_read32(CR_DBG_IRQ_LASTEV) & EV_PM_3D_MEM_FREE;
 
-	/* up to ~3 ms (the spec saw 0.4-2.5 ms); bit 8 is not seen yet (E037) */
 	for (uint32_t us = 0; !freed && us < EXP_MEM_FREE_US; us += 10) {
 		if ((freed = cr_read32(CR_EVENT_STATUS) & EV_PM_3D_MEM_FREE))
 			break;
 		udelay(10);
 	}
-
 	cr_write32(CR_EVENT_CLEAR, EV_PM_3D_MEM_FREE);
-	TRACE(SFID_DBG_4, 0xE0370D01u, freed, cr_read32(0x0388));
-	const uint8_t *hwrt = fwptr(s->hwrt);
-	const uint8_t *fl_local = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS)) : NULL;
-	const uint8_t *fl_global = hwrt ? fwptr(rd32(hwrt, HWRT_FREELISTS + 4)) : NULL;
+	if (!freed)
+		TRACE(SFID_DBG_2, 0xE0410D01u);
 
-	TRACE(SFID_DBG_6, 0xE0360D00u, cr_read32(CR_PM_LIVE_SP_LOCAL1),
-	      cr_read32(CR_PM_LIVE_SP_GLOBAL1), cr_read32(CR_PM_LIVE_ALLOC_GLOBAL1),
-	      cr_read32(0x0D00));
+	if (frag_is_pr) {
+		frag_is_pr = false;
+		spm_pr_done();
+		if (hwrt)
+			TRACE(SFID_MAIN_2, RTDATA_STATE_PARTIALRENDERFINISHED, 0u);
+		s->hwrt = 0;
+		return;
+	}
 	if (!hwrt)
 		return;
-	if (fl_local) {
-		wr32(fl_local, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_LOCAL1));
-		wr32(fl_local, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_PB_LOCAL1));
-		wr32(fl_local, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_MMU_LOCAL1));
+	for (uint32_t w = 0; w < 2; w++) {
+		struct pm_freelist *fl = hwrt_freelist(hwrt, w);
+
+		if (fl)
+			pm_store_freelist(PM_CTX_FRAG, w, fl);
 	}
-	if (fl_global) {
-		wr32(fl_global, FL_STACK_TOP, cr_read32(CR_PM_LIVE_SP_GLOBAL1));
-		wr32(fl_global, FL_ALLOC_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL1));
-		wr32(fl_global, FL_ALLOC_MMU_PAGES, cr_read32(CR_PM_LIVE_ALLOC_GLOBAL1 + 8));
-	}
-	wr32(hwrt, HWRT_STATE, RTDATA_STATE_FRAG_FINISHED);
+	pm_slot_stored(PM_CTX_FRAG);
+	hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_FRAG_FINISHED);
+	TRACE(SFID_MAIN_2, RTDATA_STATE_FRAG_FINISHED, 0u);
 	s->hwrt = 0;
 }

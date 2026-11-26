@@ -85,6 +85,7 @@ void fw_main(void)
 	gpu_power_on();
 	gpu_units_init();
 	sched_init();
+	kick_init();
 
 	/* host interrupt line from the MIPS wrapper */
 	cr_write32(CR_MIPS_WRAPPER_IRQ_ENABLE, 1);

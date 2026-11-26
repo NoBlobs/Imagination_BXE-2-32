@@ -10,8 +10,8 @@
  * run, so the host is never left waiting).
  */
 #include "kick.h"
+#include "pm.h"
 
-#define CR_PM_PARTIAL_RENDER_ENABLE 0x0338
 #define SOFT_RESET_HWR_LO           0x13FFFC1Du
 #define SOFT_RESET_HWR_HI           0xFFEFFE00u
 
@@ -58,6 +58,10 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 		lost[d].pid = ctx ? ctx->pid : 0;
 	}
 
+	/* PM state at the time of the recovery (debug, E041) */
+	TRACE(SFID_DBG_9, 0xE0410F00u, ev, cr_read32(0x20C8), cr_read32(0x0348),
+	      cr_read32(0x02A0) | (cr_read32(0x02A8) << 8), cr_read32(0x0D00),
+	      cr_read32(0x20D8), cr_read32(0x0410));
 	/* 1. hold scheduling */
 	if (g.sysdata) {
 		g.sysdata->hwr_state_flags &= ~HWR_HARDWARE_OK;
@@ -92,6 +96,26 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 	gpu_power_on();
 	gpu_units_init();
 	bif_rebuild();
+
+	/*
+	 * PM: the reset lost the PM state. Forget which HWRTData the PM contexts
+	 * held, mark the render targets in use HWR (caches to zero at the next
+	 * kick) and ask the host to rebuild their free lists
+	 * (partial-render-spm.md "Freelist reconstruction after HWR").
+	 */
+	{
+		fwaddr_t hwrts[2];
+		uint32_t n = 0;
+
+		if ((busy & (1u << DM_GEOM)) && dms[DM_GEOM].hwrt)
+			hwrts[n++] = dms[DM_GEOM].hwrt;
+		if ((busy & (1u << DM_FRAG)) && dms[DM_FRAG].hwrt)
+			hwrts[n++] = dms[DM_FRAG].hwrt;
+		frag_hwr_reset();
+		pm_hwr_reconstruct(hwrts, n);
+		dms[DM_GEOM].hwrt = 0;
+		dms[DM_FRAG].hwrt = 0;
+	}
 
 	/* 6. per-DM recovery: discard the guilty commands */
 	cr_write32(CR_EVENT_CLEAR, 0xFFFFFFFFu);

@@ -12,7 +12,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-BOARD=${BOARD:-thalles@192.168.0.106}
+BOARD=${BOARD:-thalles@192.168.0.110}   # BPI-F3 16 GB (2026-11-26)
 LINUX=${LINUX:-/home/thalles/0-git/NoBlobs/linux}
 KH=${KH:-$HOME/.ssh/known_hosts}
 SSH="ssh -o UserKnownHostsFile=$KH $BOARD"
@@ -22,6 +22,8 @@ FW=$HERE/build/rogue_36.29.52.182_v1.fw
 
 deploy_fw() {
 	make -C "$HERE/src"
+	python3 "$HERE/tools/fw-preflight.py" "$FW" >/dev/null || {
+		python3 "$HERE/tools/fw-preflight.py" "$FW"; echo "pre-flight failed: not deployed"; exit 1; }
 	$SCP "$FW" "$BOARD:/tmp/"
 	$SSH "sudo install -D -m 0644 /tmp/$(basename "$FW") /lib/firmware/updates/powervr/$(basename "$FW") && sync && sha256sum /lib/firmware/updates/powervr/$(basename "$FW")"
 }

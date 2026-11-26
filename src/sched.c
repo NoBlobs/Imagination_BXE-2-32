@@ -130,6 +130,13 @@ static void ufo_update(const struct ufo *u, bool rmw)
 		*p = u->value;
 }
 
+/* SPM: signal a fence UFO from the firmware (partial-render fence). */
+void sched_ufo_signal(const struct ufo *u)
+{
+	ufo_update(u, false);
+	host_notify_needed = true;
+}
+
 /* --------------------------------------------------------- cCCB walk */
 static uint32_t task_dm(uint32_t id, uint32_t ctx_dm)
 {

@@ -49,19 +49,27 @@ What works
    * - Statistics, HWR log & reset notifications
      - Utilisation, time correlation, HWR log, FWCCB context-reset
        notification decoded by host (:exp:`E025`)
-   * - Experimental 3D rendering (``-DEXP_TA``)
+   * - 3D rendering (default since :exp:`E041`)
      - ``simple_draw`` **4/4**, ``api.smoke`` **8/8**, ``basic_draw``
        **203 pass / 0 fail** (128 not supported), depth load/store
-       (:exp:`E038`)
+       (:exp:`E038`, :exp:`E041`)
 
 Open items and next steps
 =========================
 
-* **Geometry and fragment rendering** (``-DEXP_TA``): input-attachment
-  renders still fault and caused a board hang during ``basic_draw`` in
-  :exp:`E040` (Q16n); ``FRAG_PR``, multi-kick geometry, OOM/freelist grow
-  and partial renders remain to be completed before enabling ``GEOM``/``FRAG``
-  in the default build.
+* **Second render on a device**: the TA of the second render stalls, and
+  every later TA stalls too, although the free lists load the same values
+  (``vkfwtest pre-3d``, Q29). Most likely the same gap as the
+  input-attachment fault: the TPC flush and cache zeroing at geometry
+  completion (Q19b) (:exp:`E041`).
+* **Other rendering gaps**: out-of-memory handling adds pages like the
+  reference but the TA does not resume (Q28), so big scenes lock up and
+  recover; layered rendering and firmware 1.1 wait on Q27 (:exp:`E041`,
+  ``docs/steps.md``).
+* **Acceptance oracle** (:exp:`E041`): stage A and D pass; stage C passes
+  except the four NPOT copies (Q25); stage B ``xfer`` and ``pre-cdm`` pass,
+  ``pre-3d``/``pre-ta``/``bigpb`` wait on Q29/Q28. The board hang with
+  interleaved render contexts is fixed.
 * **Stability run**: repeat ``tools/stab-run.sh`` (interrupted by external
   reboot in :exp:`E026`).
 * **Offset/NPOT/mirror transfer edge cases**: investigate
@@ -250,3 +258,8 @@ Experiment index (``docs/logRefs/``)
      - 2026-11-10
      - Input-attachment dump diff
      - Dumped ranges match; shared-PB rule added; still faults / board hang
+   * - :exp:`E041`
+     - 2026-11-26
+     - Rendering by default, PM module, SPM, tools
+     - Default build draws; oracle C/D pass (NPOT aside); hang fixed; OOM
+       resume (Q28) and second render (Q29) open

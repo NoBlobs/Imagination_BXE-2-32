@@ -20,7 +20,7 @@ Build commands
 .. code-block:: sh
 
    make -C src                                      # -> build/rogue_36.29.52.182_v1.fw
-   make -C src -B EXP="-DEXP_TA"                    # experimental geometry/fragment build
+   make -C src -B EXP="-DEXP_NO_RENDER"             # retire geometry/fragment commands unrun
    make -C src sfid SFH=<path>/pvr_rogue_fwif_sf.h  # regenerate src/include/sfid.h
    make -C src clean
 
@@ -136,37 +136,42 @@ Passed via ``make -C src -B EXP="-DNAME[=value]"``:
      - Override the TQ tiles-in-flight register value (:exp:`E022`)
    * - ``EXP_SLC_ONLY_FLUSH``
      - Use SLC-only completion flush instead of per-DM flush (:exp:`E023`)
-   * - ``EXP_TA``
-     - Enable experimental geometry (``src/geom.c``) and fragment
-       (``src/frag.c``) kicks (:exp:`E028`–:exp:`E040`)
+   * - ``EXP_NO_RENDER``
+     - Retire ``GEOM``/``FRAG``/``FRAG_PR`` commands without running them
+       and ignore ``PM_OUT_OF_MEMORY`` (the behaviour before :exp:`E041`;
+       rendering is on by default since then)
    * - ``EXP_DUMP_RENDER``
      - Dump host ``GEOM``/``FRAG`` render structures to debug trace
        (:exp:`E027`)
-   * - ``EXP_CANARY``
-     - With ``EXP_TA``: write canary VAs to unassigned address registers
-       (:exp:`E028`)
-   * - ``EXP_HS_MODE=n``
-     - With ``EXP_TA``: PM handshakes ``0x0250``/``0x0258`` (``0`` none,
-       ``1`` after PM writes [default], ``2`` around them [faults at 0];
-       :exp:`E032`)
-   * - ``EXP_PM_PAUSE``, ``EXP_PM_BCAST``, ``EXP_CLK_ON``, ``EXP_SP32``
-     - With ``EXP_TA``: PM load variants tested in :exp:`E032`
-   * - ``EXP_NO_PM_FLAGS``, ``EXP_20F8_EDGE``, ``EXP_0388``,
-       ``EXP_TOP_FIRST``
-     - With ``EXP_TA``: first-load PM flag variants tested in :exp:`E033`
-   * - ``EXP_F320``, ``EXP_UNIT_EXTRA``, ``EXP_IDX_AFTER``
-     - With ``EXP_TA``: Q16i variants tested in :exp:`E034`
-   * - ``EXP_NO_FL_LOAD``
-     - With ``EXP_TA``: omit free-list load commands (:exp:`E035`)
-   * - ``EXP_SP_LOAD_CMD=0``, ``EXP_SP_LOAD_CMD2=0``,
-       ``EXP_GEOM_SP_CMD_A=0``, ``EXP_GEOM_SP_CMD_M=0``
-     - With ``EXP_TA``: omit ALIST/MLIST SP load commands (:exp:`E037`)
+   * - ``EXP_SHARED_PB``
+     - Shared free lists between the PM contexts (``CONTEXT_PB_BASE = 0``,
+       no reload) when PM context 1 holds the same free lists; off by
+       default since it hung the board in :exp:`E040`
    * - ``EXP_MEM_FREE_US``
-     - With ``EXP_TA``: wait timeout in µs for ``PM_3D_MEM_FREE``
-       (default ``3000``; :exp:`E038`)
-   * - ``EXP_FLAGS_AFTER_SP``, ``EXP_FRAG_RGN``, ``EXP_FRAG_ISP_RENDER=v``
-     - With ``EXP_TA``: fragment/PM sequencing knobs (:exp:`E036`,
-       :exp:`E037`)
+     - Wait timeout in µs for ``PM_3D_MEM_FREE`` after a render (default
+       ``3000``; :exp:`E038`)
+   * - ``EXP_RESUME=n``
+     - What the firmware does after adding pages at an out-of-memory event:
+       ``1`` clear ``PM_OUT_OF_MEMORY`` again (default), ``2`` also
+       re-issue the TA run register; neither resumes the TA (:exp:`E041`)
+
+The knobs of the PM bring-up (:exp:`E028`–:exp:`E040`: ``EXP_TA``,
+``EXP_CANARY``, ``EXP_HS_MODE``, ``EXP_PM_*``, ``EXP_CLK_ON``, ``EXP_SP32``,
+``EXP_20F8_EDGE``, ``EXP_0388``, ``EXP_TOP_FIRST``, ``EXP_F320``,
+``EXP_UNIT_EXTRA``, ``EXP_IDX_AFTER``, ``EXP_NO_FL_LOAD``, ``EXP_*_SP_CMD*``,
+``EXP_FLAGS_AFTER_SP``, ``EXP_FRAG_*``, ``EXP_MTILE_STRIDE``,
+``EXP_FRAG_DUMP``) were removed in :exp:`E041`, when the working sequence
+became the code. The experiment pages describe what each one did.
+
+Build-time checks
+=================
+
+* ``tools/check-trace-args.py`` runs before every link: each
+  ``TRACE(SFID_x, …)`` must pass the argument count of its format string
+  (the ``cr_poll32`` trace bug of :exp:`E037`).
+* ``tools/fw-preflight.py`` checks the ``.fw`` container
+  (``board-testing-oracle`` section 2); ``tools/deploy.sh fw`` refuses to
+  copy a file that fails it.
 
 Trace ID generation
 ===================

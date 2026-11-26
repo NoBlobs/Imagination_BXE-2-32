@@ -5,6 +5,7 @@
  * kick-compute-and-3d.md, kick-geometry-ta.md).
  */
 #include "kick.h"
+#include "pm.h"
 
 /* Registers without a public name, from the spec. */
 #define CR_CDM_RUN                  0x0478
@@ -364,21 +365,25 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	case CCB_CMD_PRE_TIMESTAMP:
 	case CCB_CMD_FBSC_INVALIDATE:
 		return false;
-#ifdef EXP_TA
+#ifndef EXP_NO_RENDER
 	case CCB_CMD_GEOM:
-		/* experimental: runs, but the PM hands out no pages yet (E028) */
+#ifdef EXP_DUMP_RENDER
 		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
+#endif
 		return kick_geom(ctxaddr, ctx, hdr, payload, cmd_off);
 	case CCB_CMD_FRAG:
-		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
-		return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off);
-#endif
 #ifdef EXP_DUMP_RENDER
-	case CCB_CMD_GEOM:
-	case CCB_CMD_FRAG:
-	case CCB_CMD_FRAG_PR:
 		dump_render_cmd(id, ctxaddr, ctx, payload, hdr->cmd_size);
-		[[fallthrough]];
+#endif
+		return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off, false);
+	case CCB_CMD_FRAG_PR:
+		/*
+		 * Runs only when the SPM armed a partial render for this HWRTData;
+		 * otherwise it is consumed without running (Q16m answer).
+		 */
+		if (spm_pr_armed(*(const uint32_t *)((const uint8_t *)payload + 4)))
+			return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off, true);
+		return false;
 #endif
 	default:
 		/* Not implemented yet: complete without running, never hang the host. */
@@ -458,6 +463,12 @@ void kick_events(uint32_t ev)
 	cr_write32(CR_DBG_EVENTS_SEEN, cr_read32(CR_DBG_EVENTS_SEEN) | ev);
 	if (ev & EV_MMU_PAGE_FAULT)
 		mmu_fault();
+#ifndef EXP_NO_RENDER
+	if ((ev & EV_PM_OUT_OF_MEMORY) && dms[DM_GEOM].busy) {
+		cr_write32(CR_EVENT_CLEAR, EV_PM_OUT_OF_MEMORY);
+		spm_oom();
+	}
+#endif
 
 	for (uint32_t d = 0; d < DM_MAX; d++) {
 		struct dm_state *s = &dms[d];
@@ -490,6 +501,8 @@ void sched_poll(void)
 	if (!mask)
 		return;
 	mask |= EV_MMU_PAGE_FAULT;
+	if (dms[DM_GEOM].busy)
+		mask |= EV_PM_OUT_OF_MEMORY;
 	uint32_t ev = cr_read32(CR_EVENT_STATUS) & mask;
 
 	if (ev)
