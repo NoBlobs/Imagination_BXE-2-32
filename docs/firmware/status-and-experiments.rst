@@ -57,11 +57,18 @@ What works
 Open items and next steps
 =========================
 
-* **Renders that write nothing** (:exp:`E044`, found by ``vkfwtest``):
-  renders on the second HWRTData of a pair, and renders whose geometry ran
-  out of parameter memory, complete without any fault but leave the image
-  unchanged. ``multiframe``, ``pre-ta`` and ``bigpb`` fail; ``pre-cdm`` and
-  ``xfer`` pass.
+* **vkfwtest against the manufacturer firmware** (:exp:`E044`,
+  ``docsClean/vkfwtest-results.md``): on the same mainline + Mesa ``pvr``
+  stack the manufacturer open firmware gets 18 pass / 18 fail / 3 skip, ours
+  16 / 20 / 3. Both agree on 36 of 39 tests. The renders that write nothing
+  (second render on a device, after a parameter-buffer OOM, after a transfer)
+  fail the same way with the reference, so they are not firmware work. Only
+  three tests differ:
+
+  * ``queries``: our occlusion count is 0 (the visibility-result base is
+    probably not programmed);
+  * ``indirect`` frame 1 and ``vertex-ext`` ``divisor 4``: a later render on
+    the device fails with ours and passes with the reference.
 * **Partial renders**: the first partial render of a frame runs and the TA
   restarts; the restart after the second one faults, and one restart variant
   hung the board (Q30, :exp:`E043`). ``bigpb`` passes up to 2 M triangles.
@@ -277,5 +284,6 @@ Experiment index (``docs/logRefs/``)
    * - :exp:`E044`
      - 2026-11-27
      - ``vkfwtest`` pixel-checking harness
-     - ``pre-cdm``, ``xfer``, stage D pass; second-HWRTData and post-OOM
-       renders write nothing
+     - ``pre-cdm``, ``xfer``, stage D pass; full battery 16/20/3 vs the
+       manufacturer firmware's 18/18/3; only ``queries``, ``indirect`` and
+       ``vertex-ext`` differ

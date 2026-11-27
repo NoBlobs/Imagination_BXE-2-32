@@ -119,6 +119,12 @@ On the host GPU of the development PC (an NVIDIA GTX 1060), every test of
 ``all`` passes, and so do the ``prio-*`` tests. So the expected values are right
 (:exp:`E044`). ``hwr-lockup`` is not run there, because it would freeze the display.
 
+On the board, ``docsClean/vkfwtest-results.md`` gives the reference: with the
+manufacturer firmware, the vendor stack passes every test it can run (38/38),
+and the mainline + Mesa ``pvr`` stack gets 18 pass / 18 fail / 3 skip. Those 18
+tests must pass with our firmware too; :exp:`E044` compares the two
+test by test.
+
 Acceptance oracle
 =================
 

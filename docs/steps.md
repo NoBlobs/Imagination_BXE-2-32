@@ -15,15 +15,44 @@ dependency order. Each step gives:
 Written against `docsClean` `2d4b018` ("General improvements"). Clean-room rules are
 unchanged: sources are `docsClean/` and our own experiments only.
 
-## Progress (E041, 2026-11-26)
+## Next, by priority (E044, `docsClean` `50055ae`)
+
+`docsClean/vkfwtest-results.md` gives the manufacturer open firmware's results on the same
+mainline + Mesa `pvr` stack: 18 pass / 18 fail / 3 skip. Ours: 16 / 20 / 3. The two agree on
+36 of 39 tests (E044, "Comparison with the manufacturer firmware"). The work is ordered by
+that comparison:
+
+1. **`queries`: occlusion count 0** (the reference gets `960`).
+   - Do: program the visibility-result base and the query index in the fragment kick, and
+     write the counters back at the end of the render.
+   - Spec: the fragment kick register list in `docsClean`; ask if the occlusion registers
+     are not there.
+   - Done when: `vkfwtest queries` passes.
+2. **`indirect` frame 1 and `vertex-ext` `divisor 4`**: renders after the first on a device
+   that pass with the reference and fail with ours.
+   - Do: first check the GPU clock in our DTB (the reference uses 819.2 MHz; 1 GHz gives
+     intermittent errors). Then compare the second render of these two tests with the
+     `multiframe` frame 1 (which fails on both) to find what our firmware does differently.
+   - Done when: both pass. Then the 18-test baseline of `docsClean` section 4 holds.
+3. **Keep the other 18 failures clean**: they fail the same way with the reference
+   (`multiframe` frame 1, `pre-ta`/`bigpb`/`texture` frame 0, `raster` 1152/4096, …), so
+   they are not firmware work. They must complete with no timeout, device lost or kernel
+   fault, which already holds. Lower priority than before: the second-HWRTData, post-OOM and
+   after-transfer leads of E044.
+4. **Stage E without `VK_ERROR_DEVICE_LOST`**: the reference and the vendor stack do not
+   return it either, so phase 5 needs only a clean recovery (which holds) until Mesa changes.
+
+The phases below keep their content; their acceptance checks are read against this baseline.
+
+## Progress (E044, 2026-11-27)
 
 | Phase | State |
 |---|---|
 | 1 | Done (E041–E043): PM slots, TA-finished TPC/RTC flush, full geometry flush, RTC programming, PM-MMU invalidation, first-kick PM reset pulses. **The second HWRTData works** (`pre-3d`, `pre-ta` pass). CPU zeroing of TPC/RTC after HWR not done (SLC flush instead). |
-| 2 | Stages A and C pass. Stage B now runs the pixel-checking `vkfwtest` (E044): `pre-cdm`, `xfer` pass; `multiframe`, `pre-ta`, `bigpb` **fail on wrong pixels** (second HWRTData and post-OOM renders write nothing). Stage D (`vkfwtest xfer` after suspend) passes after stage A; it fails after compute/sync suites (E043). |
+| 2 | Stages A and C pass. Stage B runs the pixel-checking `vkfwtest` (E044): `pre-cdm`, `xfer` pass; `multiframe`, `pre-ta`, `bigpb` fail on wrong pixels, **the same way as with the manufacturer firmware** (`docsClean` `50055ae`). Full battery 16/20/3 vs the reference's 18/18/3: only `queries`, `indirect`, `vertex-ext` differ. Stage D (`vkfwtest xfer` after suspend) passes after stage A; it fails after compute/sync suites (E043). |
 | 3 | Non-first kicks, `owner_geom`, HWRTData states done; no workload exercising them yet. |
 | 4 | Ready pages, grow, TA stop/resume, `FRAG_PR` via the SPM failing-UFO check: **the first partial render of a frame runs and the TA restarts**; the second restart faults (Q30). ZS backing not done. |
-| 5 | Full HWR teardown done (E043). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`** (stage E requires it). |
+| 5 | Full HWR teardown done (E043). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`**. The manufacturer firmware on Mesa and the vendor stack behave the same, so this is not a firmware gap. |
 | 6 | BIF/PM state reset at `POW_OFF`, `kick_init()` at boot; barriers already in place. Stage D passes. |
 | 7 | Q27 answered (`fab1fc9`: per-layer region headers, PBE, ZLS, layer loop at `PIXELBE_END_RENDER`); not implemented yet, version stays 1.0. |
 | 8 | Not started (optional). |

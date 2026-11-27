@@ -160,5 +160,70 @@ The failures sort into the leads found earlier:
 Compute, transfers, synchronisation and memory are right everywhere. The firmware work that
 remains is on the 3D side of renders after the first.
 
+## Comparison with the manufacturer firmware (`docsClean` `50055ae`)
+
+`docsClean/vkfwtest-results.md` records `vkfwtest -k all` (commit `db6f34d`) on the same
+board with the manufacturer's firmware, on two stacks:
+
+| Stack | Pass | Fail | Skip |
+|---|---|---|---|
+| Vendor kernel 6.6.63 + `libVK_IMG.so` + closed firmware | 38 | 0 | 1 (`local-read`) |
+| Mainline 7.4.0-rc1 + Mesa `pvr` + manufacturer open firmware `rogue_36.29.52.182_v1.fw` | 18 | 18 | 3 |
+| Mainline 7.4.0-rc1 + Mesa `pvr` + **our firmware** `1b5eae38` | 16 | 20 | 3 |
+
+The vendor run validates the harness on this GPU: every test it can run passes. The fair
+comparison is the second row, the same stack as ours with only the firmware swapped.
+
+**Same result as the manufacturer firmware (36 of 39 tests).** Every test it fails, ours fails
+too, almost always with the same symptom:
+- `multiframe`: frame 1 still shows frame 0's image;
+- `pre-ta`, `bigpb`, `texture`: frame 0 all zeros;
+- `sizes`: `33x17`;
+- `formats`: `R8G8B8A8_SRGB`;
+- `vertex`: frame 0 points;
+- `raster`: strip + primitive restart, **1152 of 4096** pixels wrong on both;
+- `input-attach`, `zs-load`, `mrt`, `secondary`, `multiview`, `idle-resume`, `stress`,
+  `soak`, `churn`: frame 1 or pass 2.
+
+So three of the leads above do not tell our firmware apart from the manufacturer's: the
+second render on a device, the render after a parameter-buffer OOM, and the render after a
+transfer. `docsClean` attributes them to Mesa `pvr`. We cannot confirm that cause; we can
+only say that our firmware behaves like the reference there.
+
+**HWR and priorities match too.**
+- `hwr-lockup`: the reference also recovers after the 30 s watchdog with no
+  `VK_ERROR_DEVICE_LOST`. The vendor stack does not return it either.
+- `prio-cdm` passes on both; `prio-3d` and `prio-ta` fail calibration on both.
+
+**Real differences (3 tests).**
+
+| Test | Manufacturer open firmware | Ours |
+|---|---|---|
+| `queries` | pass (occlusion `960 / 0 / 0`) | occlusion count **0** |
+| `indirect` | pass | frame 1 indirect draws: 13056 of 16384 pixels wrong |
+| `vertex-ext` | fails only at `divisor 0` | fails already at `divisor 4` (the second case) |
+
+- **`queries`:** the reference gets the occlusion count; ours does not. This confirms the
+  lead that our fragment kick does not program the visibility-result base.
+- **`indirect`, `vertex-ext`:** with the reference, a render after the first on a device
+  passes here; with ours it does not. So part of the "second render" problem is ours, and
+  these two tests are where it shows.
+
+No test passes on ours and fails on the reference. The values that differ between the vendor
+and Mesa runs (`compute-dims` 512 vs 128, `subgroupSize` 1 vs 32, `robust` `0x0` vs
+`0x1000`) come from the driver, and ours match the Mesa run.
+
+**Acceptance baseline** (`docsClean` section 4): on mainline + Mesa `pvr`, the 18 tests that
+pass with the reference must pass, with no timeout, device lost or kernel fault; the other
+18 must complete without them. We pass 16 of the 18; `queries` and `indirect` are missing.
+The second condition already holds.
+
+**Not checked.**
+- The reference DTB runs the GPU at **819.2 MHz** ("1 GHz exhibits intermittent
+  compute/render errors"). Our DTB's GPU clock is not checked; a 1 GHz clock could explain
+  `indirect` and `vertex-ext`.
+- Whether our board run used the same Mesa commit (`f7c93a1`).
+- Our run used the working tree after `db6f34d` with `-L 300 -T 40`.
+
 **Clean-room note.** Own firmware, own harness, measurements on the board; `docsClean` section 4
-for the test design.
+for the test design; `docsClean/vkfwtest-results.md` for the reference results.
