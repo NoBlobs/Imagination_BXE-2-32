@@ -153,6 +153,8 @@ void stats_notify_context_reset(fwaddr_t ctxaddr, uint32_t dm, uint32_t reason,
 void mmu_cache_op(const struct kccb_cmd *cmd);
 void slc_flush_inval(void);
 void tlb_flush_dynamic(void);
+bool gpu_read(fwaddr_t memctx, uint64_t va, void *buf, uint32_t len);
+bool gpu_zero(fwaddr_t memctx, uint64_t va, uint32_t len);
 
 /* entry points */
 void fw_main(void);

@@ -55,4 +55,5 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off,
 	       bool partial);
 void frag_done(struct dm_state *s);
+bool frag_rta_next(struct dm_state *s);
 void frag_hwr_reset(void);

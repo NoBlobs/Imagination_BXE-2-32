@@ -28,6 +28,113 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q36 — Render-target array with load op LOAD: the clears of the touched layers are lost (answered in `88e48e7`: the manufacturer firmware fails the same way, Mesa side; bit 0 comes from the hardware/VDM stream)
+
+[E045](logRefs/E045-rta-fw-1.1.md), `vkfwtest rta` step 3 (vkfwtest after this change):
+- the 6-layer colour image is filled by earlier render passes;
+- a render pass with load op `LOAD` and **no draw** runs `vkCmdClearAttachments` on layer 1
+  (whole area) and layer 5 (an inner rect).
+
+With the RTA-enabled Mesa (`5d2dc45`, `gs_rta_support` on):
+- the geometry marks layers 0, 1 and 5 (bitmap `0x23`, `CR[0x0D20]` = 3);
+- our firmware renders exactly those (`valid_render_targets[] = {0, 1, 5}`, `RENDER_TGT_ID` =
+  layer, region headers at `rgn_header + stride × layer`, `CR[0x03E0]` 0/0/1);
+- layers 1 and 5 come back with their **old** contents: the load works, the clears are missing;
+- layer 0 is unchanged, which is right.
+
+The other layered renders of the same test pass with RTA on: 6 layers with load op `CLEAR`
+(colour + D32), 6 stencil layers (D24S8), and a 3D image viewed as a 2D array. With RTA off in
+Mesa, step 3 passes too.
+1. With the manufacturer firmware v1.1 and the same RTA-enabled Mesa, does `vkfwtest rta`
+   step 3 pass?
+2. Does the fragment kick do anything per layer for the background object of a `LOAD` render
+   (`pds_bgnd`, `isp_bgobjvals`, `0x0F10`) that the spec does not list?
+3. Why is layer 0 marked in the RTC bitmap when only layers 1 and 5 get geometry?
+
+#### Q34 — MSAA resolve in the PBE (`downscale`) writes nothing (`msaa` with `gs_rta_support`; answered in `b50fabe`: firmware passes the PBE words through, the reference fails the same way, Mesa side)
+
+[E045](logRefs/E045-rta-fw-1.1.md). When Mesa sees firmware 1.1 it turns `gs_rta_support` on, and
+with it it resolves MSAA attachments in the PBE at the end of the render
+(`attachment->is_pbe_downscalable`, PBE `REG_WORD0.downscale`, bit 56), instead of a separate
+transfer. With the old Mesa (no RTA) `vkfwtest msaa` passes. With RTA on, the render runs
+(one layer, no RTA loop, no fault, `HWRTData0State=5`) but every resolved pixel is 0.
+1. Does the fragment kick do anything different when a PBE word has `downscale` set: another
+   register, a sample-count field, a different `0x0F30` (`ISP_AA`) or `0x0FA0` (`ISP_MSCTL`)
+   value, or a step at `PIXELBE_END_RENDER`?
+2. Or does the firmware pass the PBE words through unchanged, so that the problem is on the
+   Mesa side?
+
+#### Q35 — `CR[0x0D20]` reads 0 at TA finished of the last kick (render-target arrays; answered in `b50fabe`, implemented in E045: bitmap scan at the last kick through a GPU-MMU walk)
+
+[E045](logRefs/E045-rta-fw-1.1.md). Six-layer render in two geometry kicks (`FIRSTKICK`, then
+`LASTKICK`), RTC present:
+- **First kick:** `CR[0x0D20]` reads 6 at TA finished.
+- **Last kick:** we write `CR[0x0D20] = 6` before the kick, then it reads 0 at TA finished.
+
+The spec reads `CR[0x0D20]` only at TA finished of a non-last kick, and at the last kick it
+scans the RTC bitmap (`rtc_dev_addr + 0x200`). We cannot map client memory yet, so we keep the
+count of the earlier kicks and list layers `0..max_rts-1` when the count equals `max_rts`.
+1. Does `CR[0x0D20]` count the layers set for the first time in the current kick, or is it reset
+   by `CR[0x0CB8] = 1`?
+2. At TA finished of the last kick, does the firmware read `CR[0x0D20]` at all, or does it take
+   the count from the bitmap scan only?
+3. How does the firmware map `rtc_dev_addr + 0x200`: which MMU context (the render context's
+   memory context?), and which window (remap slot, TLB entry)?
+
+#### Q31 — Who fills `rta_ctl.active_render_targets` and `valid_render_targets[]`? (render-target arrays; answered in `dd37220`, implemented in E045)
+
+The Q27 answer runs the layer loop only when `rta_ctl.active_render_targets` (`+0xD8`) is
+non-zero. The mainline kernel creates the HWRTData with `active_render_targets = 0`,
+`render_target_index = 0` and a `valid_render_targets` array of `max_rts` u32 entries that it
+does not initialise. Mesa never writes them. So something in the firmware sets them.
+1. When are `active_render_targets` and `valid_render_targets[]` written (geometry kick,
+   `TA finished`, fragment kick), and from what (a register read back after the TA, e.g.
+   `0x0D20`, the RTC, the command)? What is `cumul_active_render_targets` (`+0xDC`) used for?
+2. With `max_rts = 6` and geometry in only some layers, does the reference render all six
+   layers (each needs its clear/store) or only the layers with geometry?
+3. Does the fragment kick reset `render_target_index`/`current_render_target` at the start of
+   each render, and `active_render_targets` at the end?
+4. Are `rgnhdr_single_rt_size` / `rgnhdr_scratch_offset` (fragment regs `+440`/`+444`) used?
+5. Does a partial render (`FRAG_PR`) of a layered render loop over the layers too
+   (`rta_num_partial_renders_fw_addr`)?
+
+Our choice until answered (E045): at the fragment kick, if `active_render_targets == 0`
+and `max_rts > 1`, fill `valid[i] = i`, set `active_render_targets = max_rts`, and clear it
+again after the last layer; `make EXP=-DEXP_RTA_ACTIVE_ONLY` turns this off.
+
+#### Q32 — Occlusion queries: which register takes `isp_oclqry_base`? (answered in `dd37220`: `CR[0x0FC0/0x0FC4]`; `queries` passes, E045)
+
+With the manufacturer firmware, `vkfwtest queries` reads an occlusion count of `960`; with
+ours it reads `0` (E044). Our fragment kick does not write `rogue_fwif_frag_regs`
+`isp_oclqry_base` (`+112`, 64-bit) nor `isp_oclqry_stride` (`+80`); the register table of
+`kick-compute-and-3d.md` does not list them, and no public header gives their address.
+1. Which register(s) does the fragment kick write from `isp_oclqry_base` (and
+   `isp_oclqry_stride`, `isp_zls_pixels` `+84`, `isp_xtp_pipe_enable` `+48`, `tpu` `+56`,
+   `pixel_phantom` `+64`, `fb_cdc_zls` `+144`, `isp_dummy_stencil/depth_store_base`
+   `+424`/`+432`), and under which condition?
+2. Does the firmware do anything at the end of the render for the query counters (a flush,
+   a write-back), before the DM 3 cache flush?
+
+#### Q33 — Who supplies the render-target id to the end-of-tile program? (answered in `dd37220`: `BCAST[0x03D8]`; `rta` passes, E045)
+
+[E045](logRefs/E045-rta-fw-1.1.md). With firmware 1.1 and a public Mesa that enables
+`gs_rta_support`, the layer loop runs (`Kick RTA render 2 of 6` … `6 of 6`). But every layer
+is written to layer 0: a 6-layer colour image shows the layer-5 clear colour in layer 0.
+- **Public Mesa:** for an image that is not 3D, the end-of-tile program computes the PBE
+  address as `state + rta_element_stride × layer_id` (`pvr_usc.c`, `nir_umad64_32`).
+  `layer_id` is the USC special register `RENDER_TGT_ID` (`PCO_SR_RENDER_TGT_ID`).
+- **The spec** (`kick-compute-and-3d.md`, "Render-target arrays") adds `layer` to bits
+  `27:14` of PBE word 1 only when `(word0_hi & 3) == 2`, which is `TWIDDLE_3D`. A 2D array
+  image has `memlayout` 1 (twiddled) or 0 (linear), so that step does nothing for it. In our
+  trace `word0_hi` is `0x0200007D` and `max_rts` is 6: no MRT is selected.
+1. What gives `RENDER_TGT_ID` a value other than 0 in the end-of-tile program? Is it a
+   register the firmware writes per layer (which one, which value: the layer index or
+   `valid_render_targets[index]`), or does the hardware take it from the region header?
+2. If it is a register, is it written once per layer next to `0x0F20/0x0F24`, or at the
+   first layer only?
+3. Is the `RENDER_TGT_ID` for a 3D image (`TWIDDLE_3D`) the same value, with the `zslice`
+   add as an extra?
+
 #### Q30 — Restart after the second partial render on the same HWRTData (blocking for big scenes)
 
 [E043](logRefs/E043-pm-mmu-inval-first-kick-reset-hwr.md), `vkfwtest bigpb` frame 3 (4 M

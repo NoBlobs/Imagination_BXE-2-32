@@ -16,7 +16,7 @@ import struct
 FW_BLOCK = 4096
 INFO_VERSION = 3
 FLAGS_OPEN_SOURCE = 1 << 0
-FW_VERSION = (1, 0, 1)  # major, minor, build
+FW_VERSION = (1, 1, 1)  # major, minor, build: 1.1 = render-target arrays (Q27)
 
 BVNC = (36, 29, 52, 182)
 

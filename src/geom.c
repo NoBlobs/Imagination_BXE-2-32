@@ -150,6 +150,74 @@ static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 		TRACE(SFID_DBG_4, 0xE0410B50u, ok_l, ok_g);
 }
 
+/*
+ * Render-target arrays (kick-compute-and-3d.md "Render-target arrays",
+ * answer to Q31). At a first kick after a partial render, the per-layer
+ * partial-render counters start again.
+ */
+static void geom_rta_pr_reset(uint8_t *hwrt)
+{
+	uint32_t f = rd32(hwrt, HWRT_FLAGS);
+	uint32_t *npr = fwptr(rd32(hwrt, HWRT_RTA_NUM_PR));
+
+	if (!(f & HWRT_FLAGS_PRIOR_PR) || !npr)
+		return;
+	for (uint32_t i = 0; i < rd32(hwrt, HWRT_RTA_MAX_RTS); i++)
+		hw_wr32(npr, 4 * i, 0);
+	hw_wr32(hwrt, HWRT_FLAGS, f & ~HWRT_FLAGS_PRIOR_PR);
+}
+
+/*
+ * The layers of the render, at the last kick before the TA starts (answer to
+ * Q35): the first `active_render_targets` set bits of the RTC bitmap at
+ * rtc_dev_addr + 0x200 (bit k = layer k touched by an earlier kick).
+ */
+#define RTC_BITMAP_OFF  0x200u
+#define RTC_BITMAP_LEN  0x100u
+
+static void geom_rta_fill(uint8_t *hwrt, fwaddr_t memctx, uint64_t rtc)
+{
+	uint32_t active = rd32(hwrt, HWRT_RTA_ACTIVE);
+	uint32_t max_rts = rd32(hwrt, HWRT_RTA_MAX_RTS);
+	uint32_t *valid = fwptr(rd32(hwrt, HWRT_RTA_VALID_RTS));
+	uint8_t bm[RTC_BITMAP_LEN];
+	uint32_t n = 0;
+
+	hw_wr32(hwrt, HWRT_RTA_CTL, 0);
+	hw_wr32(hwrt, HWRT_RTA_CURRENT, 0);
+	if (!valid || !active)
+		return;
+	slc_flush_inval();      /* the RTC flush at TA finished may sit in the SLC */
+	if (!gpu_read(memctx, rtc + RTC_BITMAP_OFF, bm, sizeof(bm))) {
+		/* cannot read it: every layer, in order */
+		TRACE(SFID_DBG_4, 0xE0450002u, active, max_rts);
+		active = max_rts;
+		hw_wr32(hwrt, HWRT_RTA_ACTIVE, active);
+		for (n = 0; n < active; n++)
+			hw_wr32(valid, 4 * n, n);
+	} else {
+		uint32_t bits = 0;
+
+		for (uint32_t k = 0; k < 8 * RTC_BITMAP_LEN; k++) {
+			if (!(bm[k / 8] & (1u << (k % 8))))
+				continue;
+			if (n < active)
+				hw_wr32(valid, 4 * n++, k);
+			bits++;
+		}
+		if (bits > active)
+			TRACE(SFID_DBG_4, 0xE0450005u, bits, active);   /* more layers marked than counted */
+		if (n < active) {
+			TRACE(SFID_DBG_4, 0xE0450004u, n, active);   /* fewer bits than counted */
+			active = n;
+			hw_wr32(hwrt, HWRT_RTA_ACTIVE, active);
+		}
+	}
+	if (active)
+		hw_wr32(hwrt, HWRT_RTA_CURRENT, hw_rd32(valid, 0));
+	TRACE(SFID_MAIN_191, active);
+}
+
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
 {
@@ -211,18 +279,28 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	{
 		const uint8_t *st = (const uint8_t *)fwptr(ctxaddr) + 304;
 		uint64_t rtc = rd64(hwrt, HWRT_RTC);
-		uint32_t active = rd32(hwrt, HWRT_RTA_ACTIVE);
+		bool first = flags & GEOM_FLAGS_FIRSTKICK;
 
 		cr_write64(CR_VDM_CTX_STATE_BASE, rd64(st, 0));
 		cr_write64(CR_RTC_BASE, rtc);
 		if (rtc) {
+			/* render-target arrays: the TA marks the layers it touches (Q31) */
+			if (first) {
+				hw_wr32(hwrt, HWRT_RTA_ACTIVE, 0);
+				geom_rta_pr_reset(hwrt);
+			}
+			if (flags & GEOM_FLAGS_LASTKICK)
+				geom_rta_fill(hwrt, ctx->fw_mem_context_fw_addr, rtc);
 			cr_write32(CR_TE_TPC_STRIDE, rd32(common, COMMON_TPC_STRIDE));
 			cr_write32(CR_GEOM_CE0, 0);
 		} else {
-			cr_write32(CR_GEOM_CE0, (flags & GEOM_FLAGS_FIRSTKICK) ? 1 : 3);
+			hw_wr32(hwrt, HWRT_RTA_ACTIVE, first ? 0 : 1);
+			hw_wr32(hwrt, HWRT_RTA_CTL, 0);
+			hw_wr32(hwrt, HWRT_RTA_CURRENT, 0);
+			cr_write32(CR_GEOM_CE0, first ? 1 : 3);
 		}
 		cr_write32(CR_RTC_CTRL, 1);
-		cr_write32(CR_RTA_ACTIVE, active);
+		cr_write32(CR_RTA_ACTIVE, rd32(hwrt, HWRT_RTA_ACTIVE));
 	}
 	cr_write32(CR_TE_CORE_SEL, 0);          /* primary core 0 */
 
@@ -264,6 +342,7 @@ void geom_done(struct dm_state *s)
 {
 	uint8_t *hwrt = fwptr(s->hwrt);
 	bool last = s->flags & GEOM_FLAGS_LASTKICK;
+	bool rtc = cr_read64(CR_RTC_BASE) != 0;
 
 	if (!last) {
 		cr_write32(CR_VHEAP_STORE, 1);
@@ -271,7 +350,7 @@ void geom_done(struct dm_state *s)
 			TRACE(SFID_DBG_2, 0xE0420B60u);
 	}
 	cr_write32(CR_TE_TPC_FLUSH, 0x40000000u);
-	if (cr_read64(CR_RTC_BASE)) {
+	if (rtc) {
 		cr_write32(CR_RTC_CTRL, 2);
 		if (!cr_poll32(CR_RTC_CTRL, 2, 0, 10000))
 			TRACE(SFID_DBG_2, 0xE0420BB8u);
@@ -281,6 +360,18 @@ void geom_done(struct dm_state *s)
 
 	if (!hwrt)
 		return;
+	/* render-target arrays: the hardware count of touched layers (Q31) */
+	/*
+	 * CR[0x0D20] counts the layers newly marked by this kick (Q35): it gives
+	 * active_render_targets at a non-last kick only; the last kick keeps the
+	 * count, its layers were listed at its kick.
+	 */
+	if (rtc) {
+		if (!last)
+			hw_wr32(hwrt, HWRT_RTA_ACTIVE, cr_read32(CR_RTA_ACTIVE));
+	} else if (last && !(rd32(hwrt, HWRT_FLAGS) & HWRT_FLAGS_PRIOR_PR)) {
+		hw_wr32(hwrt, HWRT_RTA_ACTIVE, 1);
+	}
 	if (last)
 		hw_wr32(hwrt, HWRT_GEOM_CACHES_ZEROING, 0);
 	hw_wr64(hwrt, HWRT_ALIST_SP, cr_read32(CR_PM_ALIST_SP));

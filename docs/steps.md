@@ -22,12 +22,8 @@ mainline + Mesa `pvr` stack: 18 pass / 18 fail / 3 skip. Ours: 16 / 20 / 3. The 
 36 of 39 tests (E044, "Comparison with the manufacturer firmware"). The work is ordered by
 that comparison:
 
-1. **`queries`: occlusion count 0** (the reference gets `960`).
-   - Do: program the visibility-result base and the query index in the fragment kick, and
-     write the counters back at the end of the render.
-   - Spec: the fragment kick register list in `docsClean`; ask if the occlusion registers
-     are not there.
-   - Done when: `vkfwtest queries` passes.
+1. **`queries`: done (E045).** `CR[0x0FC0]` from Q32 (`dd37220`), plus a vkfwtest fix:
+   no timestamps without `timestampValidBits`. The test passes with exact counts.
 2. **`indirect` frame 1 and `vertex-ext` `divisor 4`**: renders after the first on a device
    that pass with the reference and fail with ours.
    - Do: first check the GPU clock in our DTB (the reference uses 819.2 MHz; 1 GHz gives
@@ -41,10 +37,17 @@ that comparison:
    after-transfer leads of E044.
 4. **Stage E without `VK_ERROR_DEVICE_LOST`**: the reference and the vendor stack do not
    return it either, so phase 5 needs only a clean recovery (which holds) until Mesa changes.
+5. **Render-target arrays (E045): done on the firmware side for normal renders.** Same result as
+   the manufacturer firmware on every `vkfwtest rta` step. The `LOAD` subset step and `msaa`
+   with RTA on fail on both firmwares, in Mesa (Q34, Q36). Open:
+   - the kernel must report UAPI 1.1.0 and answer `DRM_PVR_DEV_QUERY_FW_INFO_GET`, or Mesa never
+     turns RTA on;
+   - the layer loop for `FRAG_PR`, the per-layer partial-render counters and the RTC zeroing on
+     OOM, after Q30.
 
 The phases below keep their content; their acceptance checks are read against this baseline.
 
-## Progress (E044, 2026-11-27)
+## Progress (E045, 2026-11-27)
 
 | Phase | State |
 |---|---|
@@ -54,7 +57,7 @@ The phases below keep their content; their acceptance checks are read against th
 | 4 | Ready pages, grow, TA stop/resume, `FRAG_PR` via the SPM failing-UFO check: **the first partial render of a frame runs and the TA restarts**; the second restart faults (Q30). ZS backing not done. |
 | 5 | Full HWR teardown done (E043). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`**. The manufacturer firmware on Mesa and the vendor stack behave the same, so this is not a firmware gap. |
 | 6 | BIF/PM state reset at `POW_OFF`, `kick_init()` at boot; barriers already in place. Stage D passes. |
-| 7 | Q27 answered (`fab1fc9`: per-layer region headers, PBE, ZLS, layer loop at `PIXELBE_END_RENDER`); not implemented yet, version stays 1.0. |
+| 7 | Firmware reports 1.1. RTA implemented (E045): RTC count and bitmap scan (client memory read through a GPU-MMU walk), `valid_render_targets[]`, per-layer region headers, `RENDER_TGT_ID` (`0x03D8`), ZLS/SLS, `zslice`, `CR[0x03E0]`, layer loop at `PIXELBE_END_RENDER`. With RTA on, every `vkfwtest rta` step gives the manufacturer firmware's result (the `LOAD` subset step fails on both, Mesa side, Q36). Open: kernel FW_INFO query, `FRAG_PR` loop (after Q30). |
 | 8 | Not started (optional). |
 | 9 | Trace argument check done; others open. |
 | 10 | `fw-preflight.py`, `oracle.sh` (stage B/D on `vkfwtest`, `new_trace`), `check-trace-args.py`, **`vkfwtest`** (own repository, `tools/deploy.sh vkfwtest`) done. |

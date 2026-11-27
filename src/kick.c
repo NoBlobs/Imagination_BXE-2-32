@@ -487,6 +487,9 @@ void kick_events(uint32_t ev)
 		if (!s->busy || !(ev & s->event_mask))
 			continue;
 		cr_write32(CR_EVENT_CLEAR, s->event_mask);
+		/* render-target array: next layer, before the flush and the retire */
+		if (d == DM_FRAG && frag_rta_next(s))
+			continue;
 		if (d == DM_GEOM)
 			geom_done(s);   /* TPC flush before the cache flush */
 #ifdef EXP_SLC_ONLY_FLUSH

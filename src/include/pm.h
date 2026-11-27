@@ -43,6 +43,7 @@ static_assert(sizeof(struct pm_freelist) == 0x40);
 #define HWRT_MLIST_SP            0x0A0
 #define HWRT_COMMON_FW_ADDR      0x0A4
 #define HWRT_FLAGS               0x0A8
+#define HWRT_FLAGS_PRIOR_PR      0x8     /* a partial render ran (Q31 answer) */
 #define HWRT_STATE               0x0AC
 #define HWRT_FREELISTS           0x0B0
 #define HWRT_VHEAP_TABLE         0x0C8
@@ -50,6 +51,7 @@ static_assert(sizeof(struct pm_freelist) == 0x40);
 #define HWRT_RTA_CURRENT         0x0D4
 #define HWRT_RTA_ACTIVE          0x0D8
 #define HWRT_RTA_VALID_RTS       0x0E0
+#define HWRT_RTA_NUM_PR          0x0E4   /* rta_num_partial_renders_fw_addr */
 #define HWRT_RTA_MAX_RTS         0x0E8
 #define HWRT_TAIL_PTRS           0x0F0
 #define HWRT_MACROTILE_ARRAY     0x0F8

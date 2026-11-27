@@ -4,7 +4,8 @@
  * Fragment (3D) kick of a render, and of a partial render (FRAG_PR).
  *
  * Sources: docsClean/kick-compute-and-3d.md ("Fragment kick", "Observed during
- * the render", "Input-attachment renders"), kick-geometry-ta.md phase B step 3
+ * the render", "Input-attachment renders", "Render-target arrays" for the
+ * layer loop, Q27), kick-geometry-ta.md phase B step 3
  * and the OOM/PR register changes (Q16m), partial-render-spm.md, the public
  * rogue_fwif_frag_regs layout; experiments E035-E040.
  */
@@ -15,6 +16,9 @@
 #define FRAG_HWRT                0x04
 #define FRAG_REGS                0x10
 #define FRAG_FLAGS               0x1D0
+#define FRAG_FLAGS_GET_VIS_RESULTS (1u << 5)   /* occlusion query (public) */
+#define FRAG_ZLS_STRIDE          0x1D4    /* bytes per layer, render-target arrays */
+#define FRAG_SLS_STRIDE          0x1D8
 /* rogue_fwif_frag_regs, relative to FRAG_REGS */
 #define FR_USC_PIXEL_OUTPUT      0
 #define FR_USC_CLEAR             4
@@ -27,6 +31,7 @@
 #define FR_EVENT_PDS_DATA        72
 #define FR_ISP_SCISSOR_BASE      96
 #define FR_ISP_DBIAS_BASE        104
+#define FR_ISP_OCLQRY_BASE       112
 #define FR_ISP_ZLSCTL            120
 #define FR_ISP_ZLOAD_STORE_BASE  128
 #define FR_ISP_STENCIL_BASE      136
@@ -39,6 +44,7 @@
 #define COMMON_MSCTL             0x08
 #define COMMON_MSCTL_FLIPPED     0x10
 #define COMMON_MTILE_STRIDE      0x24
+#define COMMON_RGN_HEADER_SIZE   0x4C     /* region headers per layer */
 #define COMMON_ISP_MTILE_SIZE    0x50
 
 /* PM, fragment side */
@@ -86,7 +92,17 @@
 #define CR_3D_0298               0x0298
 #define CR_3D_01C8               0x01C8
 #define CR_PIXEL_LAUNCH          0x0F00
+#define CR_RENDER_TGT_ID         0x03D8   /* USC RENDER_TGT_ID of the end-of-tile program (Q33) */
+#define CR_PM_FREE_ON_END        0x03E0   /* 0 on a non-last layer: keep the PM pages (Q33) */
+#define CR_ISP_OCLQRY_BASE       0x0FC0   /* per core, 64-bit (Q32) */
 
+/* bytes per region header on this core (simple parameter format v2) */
+#define RGN_HEADER_BYTES         6
+
+/*
+ * The layers of a render-target-array render are listed by the geometry at
+ * TA finished (active_render_targets, valid_render_targets[]; geom.c, Q31).
+ */
 #ifndef EXP_MEM_FREE_US
 #define EXP_MEM_FREE_US          3000     /* the spec saw 0.4-2.5 ms */
 #endif
@@ -103,9 +119,120 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
 
 static bool frag_is_pr;         /* the fragment DM runs a partial render */
 
+/* layer loop of a render-target-array render (kick-compute-and-3d.md, Q27) */
+static struct {
+	bool on;                /* more than one layer: loop at PIXELBE_END_RENDER */
+	uint32_t active;
+	uint64_t rgn_base, rgn_stride;
+	uint64_t zls_base, zls_stride, sls_base, sls_stride;
+	uint64_t pbe_w1[8];
+	uint8_t pbe_layered;    /* bit n: MRT n is a TWIDDLE_3D target (zslice add) */
+} rta;
+
 void frag_hwr_reset(void)
 {
 	frag_is_pr = false;
+	rta.on = false;
+}
+
+/* Program the per-layer registers for layer `layer` (steps 1-4). */
+static void rta_program(uint32_t layer)
+{
+	bcast_write64(CR_ISP_MTILE_BASE, rta.rgn_base + rta.rgn_stride * layer);
+	bcast_write32(CR_RENDER_TGT_ID, layer);
+	for (uint32_t n = 0; n < 8; n++) {
+		uint64_t w = rta.pbe_w1[n];
+		uint32_t lo = (uint32_t)w;
+
+		if (!(rta.pbe_layered & (1u << n)))
+			continue;
+		lo = (lo & 0xF0003FFFu) | ((((lo >> 14) & 0x3FFFu) + layer) & 0x3FFFu) << 14;
+		bcast_write64(CR_PBE_WORDS + 0x40 + 8 * n, (w & ~0xFFFFFFFFull) | lo);
+	}
+	if (rta.zls_base) {
+		bcast_write64(CR_ISP_ZLOAD_BASE, rta.zls_base + rta.zls_stride * layer);
+		bcast_write64(CR_ISP_ZSTORE_BASE, rta.zls_base + rta.zls_stride * layer);
+	}
+	if (rta.sls_base) {
+		bcast_write64(CR_ISP_STENCIL_LOAD_BASE, rta.sls_base + rta.sls_stride * layer);
+		bcast_write64(CR_ISP_STENCIL_STORE_BASE, rta.sls_base + rta.sls_stride * layer);
+	}
+}
+
+/*
+ * Set up a render-target-array render (normal render): program layer
+ * valid_render_targets[0]. rta.on is true when more layers follow.
+ */
+static void rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
+		      const uint8_t *common)
+{
+	uint32_t max_rts = rd32(hwrt, HWRT_RTA_MAX_RTS);
+	uint32_t *valid = fwptr(rd32(hwrt, HWRT_RTA_VALID_RTS));
+	uint32_t active = rd32(hwrt, HWRT_RTA_ACTIVE);
+	uint32_t layer;
+
+	rta.on = false;
+	if (!active || !valid || max_rts < 2) {
+		/* one layer: RENDER_TGT_ID = current_render_target, free the PM pages */
+		bcast_write32(CR_RENDER_TGT_ID, rd32(hwrt, HWRT_RTA_CURRENT));
+		cr_write32(CR_PM_FREE_ON_END, 1);
+		return;
+	}
+	rta.on = active >= 2;
+	rta.active = active;
+	rta.rgn_base = rd64(hwrt, HWRT_RGN_HEADER);
+	rta.rgn_stride = ((uint64_t)rd32(common, COMMON_RGN_HEADER_SIZE) * RGN_HEADER_BYTES +
+			  4095u) & ~4095ull;
+	rta.zls_base = rd64(r, FR_ISP_ZLOAD_STORE_BASE);
+	rta.zls_stride = rd32(cmd, FRAG_ZLS_STRIDE);
+	rta.sls_base = rd64(r, FR_ISP_STENCIL_BASE);
+	rta.sls_stride = rd32(cmd, FRAG_SLS_STRIDE);
+	rta.pbe_layered = 0;
+	for (uint32_t n = 0; n < 8; n++) {
+		uint64_t w0 = rd64(r, FR_PBE_WORD + 24 * n);
+
+		rta.pbe_w1[n] = rd64(r, FR_PBE_WORD + 24 * n + 8);
+		if (((uint32_t)(w0 >> 32) & 3) == 2)
+			rta.pbe_layered |= 1u << n;
+	}
+	layer = hw_rd32(valid, 0);
+	hw_wr32(hwrt, HWRT_RTA_CTL, 0);
+	hw_wr32(hwrt, HWRT_RTA_CURRENT, layer);
+	TRACE(SFID_MAIN_39, layer);
+	rta_program(layer);
+	cr_write32(CR_PM_FREE_ON_END, rta.on ? 0 : 1);
+}
+
+/*
+ * PIXELBE_END_RENDER of a render-target-array render (step 4): kick the next
+ * layer before the cache flush and the retire. True if a layer was kicked.
+ */
+bool frag_rta_next(struct dm_state *s)
+{
+	uint8_t *hwrt = fwptr(s->hwrt);
+	uint32_t idx;
+	const uint32_t *valid;
+
+	if (!rta.on || frag_is_pr || !hwrt)
+		return false;
+	idx = rd32(hwrt, HWRT_RTA_CTL);
+	if (idx + 1 >= rta.active) {
+		/* last layer done; active_render_targets stays until the next first kick */
+		rta.on = false;
+		hw_wr32(hwrt, HWRT_RTA_CTL, 0);
+		return false;
+	}
+	valid = fwptr(rd32(hwrt, HWRT_RTA_VALID_RTS));
+	idx++;
+	hw_wr32(hwrt, HWRT_RTA_CTL, idx);
+	hw_wr32(hwrt, HWRT_RTA_CURRENT, hw_rd32(valid, 4 * idx));
+	TRACE(SFID_MAIN_40, idx + 1, rta.active);
+	rta_program(hw_rd32(valid, 4 * idx));
+	cr_write32(CR_PM_FREE_ON_END, idx + 1 == rta.active ? 1 : 0);
+	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER);
+	s->kick_time = gpu_timer();
+	bcast_write32(CR_PIXEL_LAUNCH, 1);
+	return true;
 }
 
 /*
@@ -169,7 +296,7 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	const uint8_t *cmd = payload;
 	const uint8_t *r = cmd + FRAG_REGS;
 	fwaddr_t hwrt_fw = rd32(cmd, FRAG_HWRT);
-	const uint8_t *hwrt = fwptr(hwrt_fw);
+	uint8_t *hwrt = fwptr(hwrt_fw);
 	const uint8_t *common = hwrt ? fwptr(rd32(hwrt, HWRT_COMMON_FW_ADDR)) : NULL;
 	uint32_t slot, isp_ctl, tif;
 
@@ -210,6 +337,9 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write64(CR_ISP_ZSTORE_BASE, partial ? 0 : rd64(r, FR_ISP_ZLOAD_STORE_BASE));
 	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
 	bcast_write64(CR_ISP_STENCIL_STORE_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
+	/* occlusion query: the count goes to isp_oclqry_base (Q32, one core) */
+	if (rd32(cmd, FRAG_FLAGS) & FRAG_FLAGS_GET_VIS_RESULTS)
+		cr_write64(CR_ISP_OCLQRY_BASE, rd64(r, FR_ISP_OCLQRY_BASE));
 	bcast_write64(CR_TPU_BORDER, rd64(r, FR_TPU_BORDER));
 	bcast_write64(CR_TPU_BORDER_PIXEL, rd64(r, FR_TPU_BORDER));
 	/* not in the spec's 3D list: as the transfer kick does */
@@ -239,6 +369,17 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	}
 	bcast_write32(CR_3D_0298, 0);
 	bcast_write32(CR_3D_01C8, 0);
+	/*
+	 * render-target arrays: the first layer's registers. A partial render
+	 * stays on one layer (the spec's per-layer partial renders are not done).
+	 */
+	if (partial) {
+		rta.on = false;
+		bcast_write32(CR_RENDER_TGT_ID, rd32(hwrt, HWRT_RTA_CURRENT));
+		cr_write32(CR_PM_FREE_ON_END, 1);
+	} else {
+		rta_setup(cmd, r, hwrt, common);
+	}
 
 	/* E. trace and state, F. trigger */
 	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, hwrt_fw, partial ? 1u : 0u, 0u, ctx->pid,
