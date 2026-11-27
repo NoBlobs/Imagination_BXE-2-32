@@ -188,6 +188,83 @@ void pm_invalidate(void)
 	memset(pm_slots, 0, sizeof(pm_slots));
 }
 
+#define CR_PM_CONTEXT_PB_BASE    0x02B0   /* bit 1: local FL differs, bit 0: global (Q38) */
+#define PM_PAUSE_TA_ALLOC        1u       /* CR_PM_PAGE_MANAGEOP bit for PM context 0 */
+#define PM_PAUSE_3D_DEALLOC      2u       /* ... for PM context 1 */
+
+/* Is the other PM context's DM running its PM work right now? */
+static bool pm_ctx_running(uint32_t ctx)
+{
+	if (ctx == PM_CTX_GEOM)
+		return dms[DM_GEOM].busy;
+	return dms[DM_FRAG].busy && dms[DM_FRAG].hwrt;   /* a 3D render, not a TQ_3D */
+}
+
+static void pm_pause_ctx(uint32_t ctx, bool on, uint32_t *paused)
+{
+	uint32_t bit = ctx == PM_CTX_GEOM ? PM_PAUSE_TA_ALLOC : PM_PAUSE_3D_DEALLOC;
+	uint32_t v = cr_read32(CR_PM_PAGE_MANAGEOP);
+
+	if (on == !!(*paused & bit) || (on && !pm_ctx_running(ctx)))
+		return;
+	cr_write32(CR_PM_PAGE_MANAGEOP, on ? v | bit : v & ~bit);
+	if (!cr_poll32(CR_PM_PAGE_MANAGEOP_ACK, bit, on ? bit : 0, 10000))
+		TRACE(SFID_DBG_2, 0xE04802A8u | bit);
+	*paused = on ? *paused | bit : *paused & ~bit;
+}
+
+/*
+ * Load the free lists of HWRTData `hwrt` into PM context `c` while the other
+ * PM context may be running on the other DM, for another context
+ * (scheduler.md "Multi-context DM 2 / DM 3 concurrency and PM freelist sync",
+ * Q38). For each list: the list C held is stored first unless the other
+ * context owns it now; a list the other context holds is paused and stored
+ * from there first, so that C gets its newest stack pointer. Then
+ * CONTEXT_PB_BASE tells the PM which lists the two contexts share. The caller
+ * loads the lists and catalogues afterwards; returns false if a load failed.
+ */
+bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
+{
+	uint32_t o = c == PM_CTX_GEOM ? PM_CTX_FRAG : PM_CTX_GEOM;
+	struct pm_slot *cs = &pm_slots[c], *os = &pm_slots[o];
+	uint32_t paused = 0, pb;
+	bool ok = true;
+	fwaddr_t nfl[2], oth[2];
+
+	/* fl[] is what each PM context's registers hold, tracked HWRTData or not */
+	for (uint32_t i = 0; i < 2; i++) {
+		fwaddr_t cur = cs->fl[i];
+
+		nfl[i] = hw_rd32(hwrt, HWRT_FREELISTS + 4 * i);
+		oth[i] = os->fl[i];
+		if (cur && (cur != nfl[i] || cs->hwrt != hwrt_fw)) {
+			if (cur == oth[i])
+				pm_pause_ctx(o, true, &paused);       /* O owns it: no store from C */
+			else if (cs->dirty)
+				pm_store_freelist(c, i, fwptr(cur));
+		}
+		if (oth[i] && oth[i] == nfl[i]) {
+			pm_pause_ctx(o, true, &paused);
+			if (os->dirty)
+				pm_store_freelist(o, i, fwptr(oth[i]));
+		}
+	}
+	cs->valid = false;
+	cs->dirty = false;
+	pm_select(c);
+	for (uint32_t i = 0; i < 2; i++) {
+		const struct pm_freelist *fl = fwptr(nfl[i]);
+
+		if (fl && !pm_load_freelist(c, i, fl))
+			ok = false;
+	}
+	pb = ((oth[0] != nfl[0]) << 1) | (oth[1] != nfl[1]);
+	cr_write32(CR_PM_CONTEXT_PB_BASE, pb);
+	TRACE(SFID_RTD_3, pb, (pb >> 1) & 1, pb & 1, 0u);
+	pm_pause_ctx(o, false, &paused);
+	return ok;
+}
+
 /* ------------------------------------------------- free-list page updates */
 static void pm_pause(bool on)
 {
@@ -364,6 +441,13 @@ static void start_partial_render(void)
 	}
 	TRACE(SFID_SPM_66, spm.pr_fence.addr, *p, spm.pr_fence.value);
 	TRACE(SFID_SPM_33);
+	/* render-target arrays: the layers the partial render must cover (Q39) */
+	{
+		const struct fwcommoncontext *gctx = fwptr(spm.cmd);
+
+		if (gctx)
+			geom_rta_oom(fwptr(spm.hwrt), gctx->fw_mem_context_fw_addr);
+	}
 	/*
 	 * The scheduler now runs the fragment context's FRAG_PR as a partial
 	 * render, looking past its FENCE_PR without consuming it (sched.c).

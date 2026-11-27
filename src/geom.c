@@ -90,30 +90,12 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
  */
 static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 {
-	struct pm_freelist *fl_local = hwrt_freelist(hwrt, PM_FL_LOCAL);
-	struct pm_freelist *fl_global = hwrt_freelist(hwrt, PM_FL_GLOBAL);
-	uint32_t pb = 3;
-	bool ok_l = true, ok_g = true;
+	bool ok;
 
-#ifdef EXP_SHARED_PB
-	/*
-	 * CONTEXT_PB_BASE bit 0 / bit 1 = the local / global free list differs
-	 * from the one PM context 1 holds; equal ones are shared and not loaded
-	 * (Q16m).
-	 */
-	if (pm_slots[PM_CTX_FRAG].valid)
-		pb = (rd32(hwrt, HWRT_FREELISTS) != pm_slots[PM_CTX_FRAG].fl[0]) |
-		     ((rd32(hwrt, HWRT_FREELISTS + 4) != pm_slots[PM_CTX_FRAG].fl[1]) << 1);
-#endif
-	pm_slot_evict(PM_CTX_GEOM, hwrt_fw);
 	cr_write32(CR_PM_20F8, 1);
 	cr_write64(CR_PM_HEAP_BASE, 0x8000000000ull);
-	pm_select(PM_CTX_GEOM);
-	if ((pb & 1) && fl_local)
-		ok_l = pm_load_freelist(PM_CTX_GEOM, PM_FL_LOCAL, fl_local);
-	if ((pb & 2) && fl_global)
-		ok_g = pm_load_freelist(PM_CTX_GEOM, PM_FL_GLOBAL, fl_global);
-	cr_write32(CR_PM_CONTEXT_PB_BASE, pb);
+	/* free lists, synchronised with a 3D of another context (Q38) */
+	ok = pm_sync_load_freelists(PM_CTX_GEOM, hwrt_fw, hwrt);
 	pm_mmu_inval();
 	if (first)
 		pm_load_bases(PM_CTX_GEOM, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
@@ -144,10 +126,9 @@ static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 		cr_write32(CR_PM_RESET_B, 1);
 	}
 	pm_slot_set(PM_CTX_GEOM, hwrt_fw);
-	TRACE(SFID_RTD_3, pb, pb & 1, (pb >> 1) & 1, 0u);
 	TRACE(SFID_RTD_15, hwrt_fw, 0u);
-	if (!ok_l || !ok_g)
-		TRACE(SFID_DBG_4, 0xE0410B50u, ok_l, ok_g);
+	if (!ok)
+		TRACE(SFID_DBG_4, 0xE0410B50u, 0u, 0u);
 }
 
 /*
@@ -160,10 +141,11 @@ static void geom_rta_pr_reset(uint8_t *hwrt)
 	uint32_t f = rd32(hwrt, HWRT_FLAGS);
 	uint32_t *npr = fwptr(rd32(hwrt, HWRT_RTA_NUM_PR));
 
-	if (!(f & HWRT_FLAGS_PRIOR_PR) || !npr)
+	if (!(f & HWRT_FLAGS_PRIOR_PR))
 		return;
-	for (uint32_t i = 0; i < rd32(hwrt, HWRT_RTA_MAX_RTS); i++)
+	for (uint32_t i = 0; npr && i < rd32(hwrt, HWRT_RTA_MAX_RTS); i++)
 		hw_wr32(npr, 4 * i, 0);
+	/* a new frame: the renders of the last one's partial renders are done */
 	hw_wr32(hwrt, HWRT_FLAGS, f & ~HWRT_FLAGS_PRIOR_PR);
 }
 
@@ -216,6 +198,28 @@ static void geom_rta_fill(uint8_t *hwrt, fwaddr_t memctx, uint64_t rtc)
 	if (active)
 		hw_wr32(hwrt, HWRT_RTA_CURRENT, hw_rd32(valid, 0));
 	TRACE(SFID_MAIN_191, active);
+}
+
+/*
+ * OOM before a FRAG_PR (Q31 answer, step 3; layered partial renders, Q39):
+ * the layers touched so far, so that the partial render runs the layer loop.
+ * The spec reads CR[0x0D20], waits for the TA (paused at the OOM) and zeroes
+ * rtc_dev_addr + 0x000..0x1FF before the bitmap scan. The RTC is flushed
+ * first so that the bitmap is in memory (our addition).
+ */
+void geom_rta_oom(uint8_t *hwrt, fwaddr_t memctx)
+{
+	uint64_t rtc = cr_read64(CR_RTC_BASE);
+
+	if (!hwrt || !rtc || rd32(hwrt, HWRT_RTA_MAX_RTS) < 2)
+		return;
+	hw_wr32(hwrt, HWRT_RTA_ACTIVE, cr_read32(CR_RTA_ACTIVE));
+	cr_write32(CR_RTC_CTRL, 2);
+	if (!cr_poll32(CR_RTC_CTRL, 2, 0, 10000))
+		TRACE(SFID_DBG_2, 0xE0420BB9u);
+	if (!gpu_zero(memctx, rtc, RTC_BITMAP_OFF))
+		TRACE(SFID_DBG_2, 0xE0450008u);
+	geom_rta_fill(hwrt, memctx, rtc);
 }
 
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
@@ -294,6 +298,8 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 			cr_write32(CR_TE_TPC_STRIDE, rd32(common, COMMON_TPC_STRIDE));
 			cr_write32(CR_GEOM_CE0, 0);
 		} else {
+			if (first)
+				geom_rta_pr_reset(hwrt);
 			hw_wr32(hwrt, HWRT_RTA_ACTIVE, first ? 0 : 1);
 			hw_wr32(hwrt, HWRT_RTA_CTL, 0);
 			hw_wr32(hwrt, HWRT_RTA_CURRENT, 0);

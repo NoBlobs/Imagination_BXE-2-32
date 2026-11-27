@@ -50,6 +50,7 @@ void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off);
 void geom_done(struct dm_state *s);
+void geom_rta_oom(uint8_t *hwrt, fwaddr_t memctx);
 /* fragment (frag.c) */
 bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off,

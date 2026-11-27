@@ -95,6 +95,16 @@
 #define CR_RENDER_TGT_ID         0x03D8   /* USC RENDER_TGT_ID of the end-of-tile program (Q33) */
 #define CR_PM_FREE_ON_END        0x03E0   /* 0 on a non-last layer: keep the PM pages (Q33) */
 #define CR_ISP_OCLQRY_BASE       0x0FC0   /* per core, 64-bit (Q32) */
+#define CR_PM_PR_CTRL            0x01C0   /* 1 on FRAG_PR, 0 on a render (Q30) */
+#define CR_3D_06D0               0x06D0   /* 0x1F, 0x3F on a Z/S partial render, 0x7F (Q30) */
+#define ISP_CTL_BIT17            (1u << 17)
+
+/* rogue_fwif_cmd_frag flags (public ROGUE_FRAG_FLAGS_*, and Q30 answer) */
+#define FRAG_FLAGS_DEPTH         0x80u
+#define FRAG_FLAGS_STENCIL       0x100u
+#define FRAG_FLAGS_8000          0x8000u
+#define FRAG_FLAGS_80000         0x80000u
+#define FRAG_FLAGS_100000        0x100000u
 
 /* bytes per region header on this core (simple parameter format v2) */
 #define RGN_HEADER_BYTES         6
@@ -129,10 +139,67 @@ static struct {
 	uint8_t pbe_layered;    /* bit n: MRT n is a TWIDDLE_3D target (zslice add) */
 } rta;
 
+/*
+ * The command's fields that depend on has_pr, per layer (partial-render-spm.md
+ * "Multi-PR kick state", Q30; layered FRAG_PR, Q39): written on every kick and
+ * on every layer of a render-target-array render.
+ */
+static struct {
+	bool pr;                /* this render is a FRAG_PR */
+	bool prior_pr;          /* hwrtdata.flags & 8 at the kick */
+	uint32_t *npr;          /* rta_num_partial_renders[], or NULL */
+	uint32_t flags, isp_ctl, bgobjvals, bgobjdepth;
+	uint64_t zlsctl, bg[3], bg_pr[3];
+} ks;
+
 void frag_hwr_reset(void)
 {
 	frag_is_pr = false;
 	rta.on = false;
+}
+
+/* ZLS control, background object, ISP_CTL and 0x06D0 for layer `layer`. */
+static void frag_layer_state(uint32_t layer)
+{
+	bool has_pr = ks.prior_pr && (!ks.npr || hw_rd32(ks.npr, 4 * layer) > 0);
+	uint32_t zlo = (uint32_t)ks.zlsctl, ctl = ks.isp_ctl, vals = ks.bgobjvals;
+	const uint64_t *bg = has_pr ? ks.bg_pr : ks.bg;
+	uint32_t v06d0 = 0x1F;
+
+	if (ks.pr) {            /* forced Z/S store on every FRAG_PR */
+		if (ks.flags & FRAG_FLAGS_DEPTH)
+			zlo |= 0x80004u;
+		if (ks.flags & FRAG_FLAGS_STENCIL)
+			zlo |= 0x40004u;
+		if (ks.flags & (FRAG_FLAGS_DEPTH | FRAG_FLAGS_STENCIL))
+			v06d0 = 0x3F;
+	}
+	if (has_pr) {           /* 2nd+ FRAG_PR and the final render: load what was stored */
+		if (ks.flags & FRAG_FLAGS_DEPTH)
+			zlo |= 0x8002u;
+		if (ks.flags & FRAG_FLAGS_STENCIL)
+			zlo |= 0x4002u;
+		vals |= 0x200u;
+		if (!(ks.flags & FRAG_FLAGS_100000) &&
+		    !(!ks.pr && (ks.flags & FRAG_FLAGS_80000)))
+			ctl &= ~ISP_CTL_BIT17;
+	} else if (ks.pr && (ks.bg[0] != ks.bg_pr[0] || ks.bg[1] != ks.bg_pr[1] ||
+			     ks.bg[2] != ks.bg_pr[2] || (ks.flags & FRAG_FLAGS_80000))) {
+		ctl |= ISP_CTL_BIT17;
+	}
+	if (ks.flags & FRAG_FLAGS_8000)
+		v06d0 = 0x7F;
+	bcast_write64(CR_ISP_ZLSCTL, (ks.zlsctl & ~0xFFFFFFFFull) | zlo);
+	bcast_write64(CR_PDS_BGRND0_BASE, bg[0]);
+	bcast_write64(CR_PDS_BGRND1_BASE, bg[1]);
+	bcast_write64(CR_PDS_BGRND3_SIZEINFO, bg[2]);
+	bcast_write32(CR_ISP_BGOBJDEPTH, ks.bgobjdepth);
+	bcast_write32(CR_ISP_BGOBJVALS, vals);
+	bcast_write32(CR_ISP_CTL, ctl);
+	bcast_write32(CR_3D_06D0, v06d0);
+	/* each FRAG_PR kick counts against its layer (Q39) */
+	if (ks.pr && ks.npr)
+		hw_wr32(ks.npr, 4 * layer, hw_rd32(ks.npr, 4 * layer) + 1);
 }
 
 /* Program the per-layer registers for layer `layer` (steps 1-4). */
@@ -160,11 +227,12 @@ static void rta_program(uint32_t layer)
 }
 
 /*
- * Set up a render-target-array render (normal render): program layer
- * valid_render_targets[0]. rta.on is true when more layers follow.
+ * Set up a render-target-array render (normal or partial): program layer
+ * valid_render_targets[0]. rta.on is true when more layers follow. Returns
+ * the layer programmed.
  */
-static void rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
-		      const uint8_t *common)
+static uint32_t rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
+			  const uint8_t *common)
 {
 	uint32_t max_rts = rd32(hwrt, HWRT_RTA_MAX_RTS);
 	uint32_t *valid = fwptr(rd32(hwrt, HWRT_RTA_VALID_RTS));
@@ -176,7 +244,7 @@ static void rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
 		/* one layer: RENDER_TGT_ID = current_render_target, free the PM pages */
 		bcast_write32(CR_RENDER_TGT_ID, rd32(hwrt, HWRT_RTA_CURRENT));
 		cr_write32(CR_PM_FREE_ON_END, 1);
-		return;
+		return rd32(hwrt, HWRT_RTA_CURRENT);
 	}
 	rta.on = active >= 2;
 	rta.active = active;
@@ -201,11 +269,13 @@ static void rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
 	TRACE(SFID_MAIN_39, layer);
 	rta_program(layer);
 	cr_write32(CR_PM_FREE_ON_END, rta.on ? 0 : 1);
+	return layer;
 }
 
 /*
- * PIXELBE_END_RENDER of a render-target-array render (step 4): kick the next
- * layer before the cache flush and the retire. True if a layer was kicked.
+ * PIXELBE_END_RENDER of a render-target-array render or partial render (step
+ * 6, Q39): kick the next layer before the cache flush and the retire (and
+ * before PR executed). True if a layer was kicked.
  */
 bool frag_rta_next(struct dm_state *s)
 {
@@ -213,7 +283,7 @@ bool frag_rta_next(struct dm_state *s)
 	uint32_t idx;
 	const uint32_t *valid;
 
-	if (!rta.on || frag_is_pr || !hwrt)
+	if (!rta.on || !hwrt)
 		return false;
 	idx = rd32(hwrt, HWRT_RTA_CTL);
 	if (idx + 1 >= rta.active) {
@@ -228,6 +298,9 @@ bool frag_rta_next(struct dm_state *s)
 	hw_wr32(hwrt, HWRT_RTA_CURRENT, hw_rd32(valid, 4 * idx));
 	TRACE(SFID_MAIN_40, idx + 1, rta.active);
 	rta_program(hw_rd32(valid, 4 * idx));
+	/* the background object and ZLS control again for this layer (Q36, Q39) */
+	frag_layer_state(hw_rd32(valid, 4 * idx));
+	bcast_write32(CR_ISP_RENDER_ORIGIN, 0);
 	cr_write32(CR_PM_FREE_ON_END, idx + 1 == rta.active ? 1 : 0);
 	cr_write32(CR_EVENT_CLEAR, EV_PIXELBE_END_RENDER);
 	s->kick_time = gpu_timer();
@@ -245,32 +318,33 @@ static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 	struct pm_freelist *fl[2] = {
 		hwrt_freelist(hwrt, PM_FL_LOCAL), hwrt_freelist(hwrt, PM_FL_GLOBAL),
 	};
-	bool ok[2] = { true, true };
+	bool ok;
 
-	/* the geometry's state is still in PM context 0 only if it holds this HWRTData */
-	if (pm_slots[PM_CTX_GEOM].dirty && pm_slots[PM_CTX_GEOM].hwrt == hwrt_fw) {
-		for (uint32_t w = 0; w < 2; w++)
-			if (fl[w])
-				pm_store_freelist(PM_CTX_GEOM, w, fl[w]);
+	/*
+	 * Same-HWRTData handoff (Q38): the geometry's state is still in PM
+	 * context 0 only if it holds this HWRTData; store it and stop tracking it
+	 * there (outside SPM).
+	 */
+	if (pm_slots[PM_CTX_GEOM].valid && pm_slots[PM_CTX_GEOM].hwrt == hwrt_fw) {
+		if (pm_slots[PM_CTX_GEOM].dirty)
+			for (uint32_t w = 0; w < 2; w++)
+				if (fl[w])
+					pm_store_freelist(PM_CTX_GEOM, w, fl[w]);
 		pm_slot_stored(PM_CTX_GEOM);
+		pm_slots[PM_CTX_GEOM].valid = false;
 	}
-	pm_slot_evict(PM_CTX_FRAG, hwrt_fw);
-
-	pm_select(PM_CTX_FRAG);
+	/* free lists, synchronised with a geometry of another context (Q38) */
+	ok = pm_sync_load_freelists(PM_CTX_FRAG, hwrt_fw, hwrt);
 	pm_mmu_inval();
 	pm_load_lists(PM_CTX_FRAG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
 		      rd64(hwrt, HWRT_VCE_LAST_CAT_BASE), rd64(hwrt, HWRT_TE_LAST_CAT_BASE),
 		      rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE), rd64(hwrt, HWRT_ALIST_SP),
 		      rd32(hwrt, HWRT_MLIST_SP));
-	for (uint32_t w = 0; w < 2; w++)
-		if (fl[w])
-			ok[w] = pm_load_freelist(PM_CTX_FRAG, w, fl[w]);
-	cr_write32(CR_PM_CONTEXT_PB_BASE, 0);   /* same free lists as the TA */
 	pm_slot_set(PM_CTX_FRAG, hwrt_fw);
 	TRACE(SFID_RTD_12, 1u, 1u, (uint32_t)rd32(hwrt, HWRT_MLIST_SP),
 	      (uint32_t)(rd64(hwrt, HWRT_ALIST_SP) >> 32), (uint32_t)rd64(hwrt, HWRT_ALIST_SP));
-	if (!ok[0] || !ok[1])
-		TRACE(SFID_DBG_4, 0xE0410B60u, ok[0], ok[1]);
+	if (!ok)
+		TRACE(SFID_DBG_4, 0xE0410B60u, 0u, 0u);
 }
 
 /*
@@ -298,7 +372,7 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	fwaddr_t hwrt_fw = rd32(cmd, FRAG_HWRT);
 	uint8_t *hwrt = fwptr(hwrt_fw);
 	const uint8_t *common = hwrt ? fwptr(rd32(hwrt, HWRT_COMMON_FW_ADDR)) : NULL;
-	uint32_t slot, isp_ctl, tif;
+	uint32_t slot, isp_ctl, tif, layer;
 
 	if (!hwrt || !common || !hwrt_freelist(hwrt, PM_FL_LOCAL))
 		return false;
@@ -324,19 +398,32 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_ISP_MTILE_SIZE));
 	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));   /* Q16l */
 
-	/* C. ZS load/store (none in a partial render), background, border */
+	/*
+	 * C. ZS bases (the command's, also in a partial render: Q30), background,
+	 * border. ZLS control, background and ISP_CTL depend on has_pr and are
+	 * written with the first layer (frag_layer_state).
+	 */
+	ks.pr = partial;
+	ks.prior_pr = rd32(hwrt, HWRT_FLAGS) & HWRT_FLAGS_PRIOR_PR;
+	ks.npr = fwptr(rd32(hwrt, HWRT_RTA_NUM_PR));
+	ks.flags = rd32(cmd, FRAG_FLAGS);
+	ks.isp_ctl = rd32(r, FR_ISP_CTL);
+	ks.bgobjvals = rd32(r, FR_ISP_BGOBJVALS);
+	ks.bgobjdepth = rd32(r, FR_ISP_BGOBJDEPTH);
+	ks.zlsctl = rd64(r, FR_ISP_ZLSCTL);
+	for (uint32_t i = 0; i < 3; i++) {
+		ks.bg[i] = rd64(r, FR_PDS_BGND + 8 * i);
+		ks.bg_pr[i] = rd64(r, FR_PDS_PR_BGND + 8 * i);
+	}
 	bcast_write64(CR_ISP_SCISSOR_BASE, rd64(r, FR_ISP_SCISSOR_BASE));
 	bcast_write64(CR_ISP_DBIAS_BASE, rd64(r, FR_ISP_DBIAS_BASE));
-	bcast_write32(CR_ISP_BGOBJDEPTH, rd32(r, FR_ISP_BGOBJDEPTH));
-	bcast_write32(CR_ISP_BGOBJVALS, rd32(r, FR_ISP_BGOBJVALS));
 	bcast_write32(CR_ISP_AA, rd32(r, FR_ISP_AA));
 	bcast_write64(CR_ISP_MSCTL, rd64(common, COMMON_MSCTL));
 	bcast_write64(CR_ISP_MSCTL_FLIPPED, rd64(common, COMMON_MSCTL_FLIPPED));
-	bcast_write64(CR_ISP_ZLSCTL, partial ? 0 : rd64(r, FR_ISP_ZLSCTL));
-	bcast_write64(CR_ISP_ZLOAD_BASE, partial ? 0 : rd64(r, FR_ISP_ZLOAD_STORE_BASE));
-	bcast_write64(CR_ISP_ZSTORE_BASE, partial ? 0 : rd64(r, FR_ISP_ZLOAD_STORE_BASE));
-	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
-	bcast_write64(CR_ISP_STENCIL_STORE_BASE, partial ? 0 : rd64(r, FR_ISP_STENCIL_BASE));
+	bcast_write64(CR_ISP_ZLOAD_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_ZSTORE_BASE, rd64(r, FR_ISP_ZLOAD_STORE_BASE));
+	bcast_write64(CR_ISP_STENCIL_LOAD_BASE, rd64(r, FR_ISP_STENCIL_BASE));
+	bcast_write64(CR_ISP_STENCIL_STORE_BASE, rd64(r, FR_ISP_STENCIL_BASE));
 	/* occlusion query: the count goes to isp_oclqry_base (Q32, one core) */
 	if (rd32(cmd, FRAG_FLAGS) & FRAG_FLAGS_GET_VIS_RESULTS)
 		cr_write64(CR_ISP_OCLQRY_BASE, rd64(r, FR_ISP_OCLQRY_BASE));
@@ -346,14 +433,6 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	isp_ctl = rd32(r, FR_ISP_CTL);
 	tif = ((isp_ctl >> 12) & 0xF) + 1;
 	bcast_write32(CR_ISP_TILES_IN_FLIGHT, tif > 2 ? 2 : tif);
-	bcast_write32(CR_ISP_CTL, isp_ctl);
-	{
-		uint32_t bg = partial ? FR_PDS_PR_BGND : FR_PDS_BGND;
-
-		bcast_write64(CR_PDS_BGRND0_BASE, rd64(r, bg));
-		bcast_write64(CR_PDS_BGRND1_BASE, rd64(r, bg + 8));
-		bcast_write64(CR_PDS_BGRND3_SIZEINFO, rd64(r, bg + 16));
-	}
 
 	/* D. pipe reset and output */
 	bcast_write32(CR_ISP_RENDER, 0);
@@ -369,17 +448,13 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	}
 	bcast_write32(CR_3D_0298, 0);
 	bcast_write32(CR_3D_01C8, 0);
+	cr_write32(CR_PM_PR_CTRL, partial ? 1 : 0);
 	/*
-	 * render-target arrays: the first layer's registers. A partial render
-	 * stays on one layer (the spec's per-layer partial renders are not done).
+	 * render-target arrays: the first layer's registers, for a render and
+	 * for a partial render alike (Q39); then the has_pr-dependent state.
 	 */
-	if (partial) {
-		rta.on = false;
-		bcast_write32(CR_RENDER_TGT_ID, rd32(hwrt, HWRT_RTA_CURRENT));
-		cr_write32(CR_PM_FREE_ON_END, 1);
-	} else {
-		rta_setup(cmd, r, hwrt, common);
-	}
+	layer = rta_setup(cmd, r, hwrt, common);
+	frag_layer_state(layer);
 
 	/* E. trace and state, F. trigger */
 	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, hwrt_fw, partial ? 1u : 0u, 0u, ctx->pid,
@@ -419,6 +494,10 @@ void frag_done(struct dm_state *s)
 
 	if (frag_is_pr) {
 		frag_is_pr = false;
+		/* the next partial renders and the final render load what this one stored */
+		if (hwrt)
+			hw_wr32((uint8_t *)hwrt, HWRT_FLAGS,
+				hw_rd32(hwrt, HWRT_FLAGS) | HWRT_FLAGS_PRIOR_PR);
 		spm_pr_done();
 		s->keep = true;         /* FRAG_PR may run again in this frame */
 		if (hwrt)

@@ -28,7 +28,31 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q38 — `vkfwtest stress`: intermittent lockups with four contexts (both firmwares)
+#### Q39 — What gives the background object its render target index (layered loads and partial renders)? (answered in `1524931`: only `0x03D8`; `FRAG_PR` runs the layer loop; implemented in E049)
+
+With render-target arrays:
+- **The end-of-tile program gets the current layer.** It reads `RENDER_TGT_ID` from
+  `BCAST[0x03D8]` (Q33).
+- **The background object does not.** Mesa's load-op program for a layered attachment
+  (`rta_load_clear`, `pvr_usc.c`) adds `RENDER_TGT_ID × layer_size` to the texture address, and
+  on the board it always loads layer 0. Seen with our firmware and with the manufacturer's (Q37).
+  We now write `pds_bgnd0..3`, `isp_bgobjvals`, `isp_bgobjdepth` and `0x0F10` again on every
+  layer, as the Q36 answer says, with no change.
+- **Consequences:**
+  - a `LOAD` render over several layers loads layer 0 into every layer. Mesa now avoids that
+    case by deferring the clears of the other layers to transfers;
+  - a partial render of a layered render cannot work either: the final render of layer *k*
+    must reload layer *k*'s partial result through the background object (Mesa's SPM), and it
+    gets layer 0's. `vkfwtest bigpb-layers` page-faults at the partial render with both
+    firmwares.
+1. Is there a register, or a field of one the firmware already writes, that gives
+   `RENDER_TGT_ID` to the PDS/USC background task (normal and partial-render background)? If
+   so, which one, and when is it written on each layer (before the `0x0F00` launch)?
+2. If the hardware never passes the layer to the background task on this core, does the
+   manufacturer firmware avoid layered partial renders some other way (for example by
+   rendering only layer 0 in a `FRAG_PR`, or by refusing the partial render)?
+
+#### Q38 — `vkfwtest stress`: intermittent lockups with four contexts (both firmwares) (answered in `1524931`: cross-context PM free-list sync; implemented in E049, `stress` 8/8)
 
 [E047](logRefs/E047-vkfwtest-investigation-tests.md). `stress` runs `multiframe`, `pre-ta`,
 `pre-cdm` and `xfer` on four devices at once.

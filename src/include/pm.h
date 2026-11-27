@@ -133,6 +133,7 @@ struct pm_slot {
 extern struct pm_slot pm_slots[2];
 void pm_slot_set(uint32_t ctx, fwaddr_t hwrt);
 void pm_slot_evict(uint32_t ctx, fwaddr_t next_hwrt);
+bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt);
 void pm_slot_stored(uint32_t ctx);
 void pm_invalidate(void);
 
