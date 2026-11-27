@@ -7,26 +7,21 @@ Gaps found while implementing from `docsClean/`. Each one is a functional questi
 following the question flow in `docsClean/clean-room-process.md`. Until a question is
 answered, the implementation uses the stated assumption.
 
-## Open — what is still missing to finish the clean firmware
+## Questions, newest first
 
-Status when these were written (2026-11-09): compute, transfers through the 3D pipe (TQ_3D),
-power, HWR, statistics and the robustness notification all work on the board. Every
-supported case passes in `compute.pipeline.basic`/`indirect_dispatch`/`builtin_var`,
-`api.fill_and_update_buffer` and `api.copy_and_blit.core.buffer_to_buffer`. **Nothing can be
-drawn yet:** the geometry (TA) and fragment (3D) kicks are missing, and so are the
-parameter-buffer handling (PM, free lists, partial renders) and preemption.
+**State on 2026-11-27: no question is open.**
+- Every question below has been answered in `docsClean` or resolved by an experiment; each
+  heading says where.
+- With the Mesa and kernel fixes of E048, the firmware passes the whole vkfwtest battery
+  (48 pass / 2 skip) and gives the manufacturer firmware's results on every test (E049).
+- **Still to implement (answered in the spec, no question pending):**
+  - preemption, i.e. context store and resume (Q24, `steps.md` phase 8, optional);
+  - on-demand `ZSBUFFER_BACKING` (Q23, Q30 item 4), which no test exercises.
 
-The questions below list what is not in `docsClean/` and not in any public source. Field
-names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core bank and
-`BCAST[x]` the broadcast bank, as in the spec. They are ordered by how much they block.
+Field names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core bank and
+`BCAST[x]` the broadcast bank, as in the spec.
 
-### A. Geometry (TA) kick — blocks all rendering
-
-> **2026-11-09, after the partial answer.** Q15, Q22 (fence), Q25 and Q26 are answered
-> (see the "Answered" table). Q16–Q21 are partly answered by the spec's observation. E027
-> and E028 filled in part of the rest by experiment, and the follow-up questions are
-> **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
-> `frag_regs`), Q23 and Q24 are still fully open.
+### After 2026-11-09: the PM, partial renders, render-target arrays and the vkfwtest battery
 
 #### Q39 — What gives the background object its render target index (layered loads and partial renders)? (answered in `1524931`: only `0x03D8`; `FRAG_PR` runs the layer loop; implemented in E049)
 
@@ -208,7 +203,7 @@ is written to layer 0: a 6-layer colour image shows the layer-5 clear colour in 
 3. Is the `RENDER_TGT_ID` for a 3D image (`TWIDDLE_3D`) the same value, with the `zslice`
    add as an extra?
 
-#### Q30 — Restart after the second partial render on the same HWRTData (blocking for big scenes)
+#### Q30 — Restart after the second partial render on the same HWRTData (answered in `50055ae` and `partial-render-spm.md`; implemented in E049, `bigpb` passes; item 4, on-demand ZS backing, not implemented)
 
 [E043](logRefs/E043-pm-mmu-inval-first-kick-reset-hwr.md), `vkfwtest bigpb` frame 3 (4 M
 triangles). The partial render now runs:
@@ -286,7 +281,7 @@ Per HWRTData we write:
    HWRTData 0. What does recovery reset in the PM/TA besides the `SOFT_RESET` pulse
    (`Zero RTC for FWCtx`, free-list reconstruction, `0x0D20`, …)?
 
-#### Q29 — Why does the second render on a device stall the TA? (answered in part in `fab1fc9`, implemented in E042; still failing, see Q29b)
+#### Q29 — Why does the second render on a device stall the TA? (answered in `fab1fc9` and `d244503`; fixed in E042/E043, see Q29b; the later "frame 1" failures were a Mesa bug, E047)
 
 [E041](logRefs/E041-render-default-and-spm.md), `vkfwtest pre-3d`. One device draws the same
 quad several times, and Mesa alternates the two HWRTData of the render-target dataset.
@@ -326,7 +321,7 @@ From then on **every** geometry kick stalls, also:
    as for the second HWRTData of a render pass). Is a reload with `0x3` and identical
    values expected to work?
 
-#### Q27 — What does firmware 1.1 change for render-target arrays (`gs_rta_support`)? (answered in `fab1fc9`; implementation pending)
+#### Q27 — What does firmware 1.1 change for render-target arrays (`gs_rta_support`)? (answered in `fab1fc9`; implemented in E045, with Q31–Q39)
 
 Mesa MR 40973 enables `gs_rta_support` only for firmware 1.1 or later, and the acceptance
 oracle expects `FW version v1.1`. We keep reporting 1.0 until we implement what 1.1
@@ -350,7 +345,7 @@ Our second render now matches `input-attachment-dump.md` in every dumped range
 3. Is anything written to memory by the firmware between the two renders (region headers,
    HWRTData fields such as the `*_last_cat_base`, `pm_alist_stack_pointer`)?
 
-#### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry (answered; see E039, input case still open)
+#### Q16m — Input-attachment renders, `FRAG_PR`, and multi-kick geometry (answered; see E039; the input case was fixed with Q29b, E043)
 
 With the Q16l answer applied ([E038](logRefs/E038-zls-mem-free-and-depth.md)):
 - `basic_draw` passes 203/331, with no failures (the rest is not supported);
@@ -454,7 +449,7 @@ step changes no register value. Sampling cannot settle this; it needs the origin
 3. If the copy is triggered by a write to a register we already write (a "commit" or
    "load" bit), which register, which bit, and in what order relative to `+0x00`/`+0x08`.
 
-#### Q16i — What action copies the loaded free list into the PM's live stack pointers? (answered in part, see E034)
+#### Q16i — What action copies the loaded free list into the PM's live stack pointers? (answered in part, E034; resolved with Q16j/Q16k)
 
 With the Q16h answer applied ([E033](logRefs/E033-pm-first-load-flags.md)), our PM state
 after init equals the original's: the same non-zero list, with `0x20F8` going 0 → 1 at the
@@ -504,7 +499,14 @@ broadcast bank, all clocks forced ON, 32-bit writes. With the PM writes **betwee
    `0x0250`/`0x0258` are skipped? What is the requester with `TAG_SB 4` / `TAG_ID 0x1B`
    (which unit reads at the base address)?
 
-#### Q16g — How does the firmware load the free lists into the PM's live state? (blocking)
+### A. Geometry (TA) kick (2026-11-09; all answered, see each heading)
+
+The questions from here down were written on 2026-11-09, when nothing could be drawn yet.
+Compute, transfers, power, HWR and statistics worked then; the geometry and fragment kicks,
+the parameter-buffer handling and preemption were missing. All of them were answered
+afterwards, partly by `docsClean` and partly by experiments (E027–E043).
+
+#### Q16g — How does the firmware load the free lists into the PM's live state? (resolved: free-list load commands, E035/E037)
 
 After the Q16f answer ([E031](logRefs/E031-pm-live-stack-pointers.md)):
 - The live global stack pointer `0x2088` and the live counter `0x2098` **read 0 although
@@ -534,7 +536,7 @@ Both polls succeed.
    and the (unidentified) live local stack pointer read? If they are already the stack top
    by then, which register write made them so?
 
-#### Q16f — PM page catalogues on a first kick (blocking)
+#### Q16f — PM page catalogues on a first kick (resolved: catalogue bases and the first-kick PM reset, E037/E043)
 
 With every PM register the spec identified now programmed as observed
 ([E030](logRefs/E030-ta-global-freelist-pb-base.md)): the local FL (`0x0210`, `0x0224`,
@@ -558,7 +560,7 @@ not write guessed values there: they are physical addresses used without the MMU
 4. What do bits 4 and 5 of `0x0D00` report, given that ours are busy (0) while the
    original's are idle (1) during geometry?
 
-#### Q16e — The PM still allocates nothing (blocking)
+#### Q16e — The PM still allocates nothing (resolved: the PM allocates since E037)
 
 With the Q16b/Q16c answers applied ([E029](logRefs/E029-ta-pm-registers-from-answers.md)),
 the geometry runs (`PERF_TA_CYCLE` counts; `0x0420` counts the kick; `0x0D00` goes
@@ -582,7 +584,7 @@ Questions:
    register sampling cannot show, for example a write that self-clears? A write-ordered
    list for one first kick would settle this, even without field names.
 
-#### Q16b — PM free-list registers (answered in part; see Q16e)
+#### Q16b — PM free-list registers (answered in part; resolved with Q16e–Q16k)
 
 With the TA kick of [E028](logRefs/E028-ta-kick-bringup.md), geometry starts: the TA
 cycle counter runs and the VDM fetches its first 64 bytes. The PM then hands out no page:
@@ -609,7 +611,7 @@ Questions:
 - Is any other PM enable needed: `PM_PARTIAL_RENDER_ENABLE`, a PM "context select" or
   "start", the macrotile array (`PM_MTILE_ARRAY`)?
 
-#### Q16c — geometry registers still unmatched
+#### Q16c — geometry registers still unmatched (resolved: geometry kick complete, E028–E042)
 
 After a working geometry job the spec saw `0x0C30/0x0C34 = 2/3`, `0x0C48 = 8`,
 `0x0C70 = 3`, `0x0C90` (64-bit) = `0x3089705F`, `0x0CA0 = 0x10`, `0x0CE0 = 1` and
@@ -617,7 +619,7 @@ After a working geometry job the spec saw `0x0C30/0x0C34 = 2/3`, `0x0C48 = 8`,
 command fields, `hwrtdata_common` fields)? E027 matched the others by value (`0x0C98`,
 `0x0C18`, `0x0C08`, `0x0C10`, `0x0C20`, `0x0C78`, `0x0C80`, `0x0418`). Please confirm those.
 
-#### Q16d — context-state registers
+#### Q16d — context-state registers (resolved: VDM context-state base, E028)
 
 [E028](logRefs/E028-ta-kick-bringup.md) found by experiment that the hardware reads
 `[0x0CB0] + 0x200` when the geometry context is enabled, and that
@@ -625,7 +627,7 @@ command fields, `hwrtdata_common` fields)? E027 matched the others by value (`0x
 - the register for `geom_reg_vdm_context_state_base_addr` (`0x0428` is a candidate);
 - the meaning of `0x0CE0`, `0x0CB8`, `0x0C48` and `0x0D20` for a new kick.
 
-#### Q15 — What is a "register set"?
+#### Q15 — What is a "register set"? (answered, see the Answered table)
 
 `kick-geometry-ta.md` writes `CR[set+0xC00…0xC98]`, `CR[set+0xCB0…0xCE0]`,
 `CR[set+0x4098]` and the run register `CR[set+0x400]`, and says the set's displacement is
@@ -638,7 +640,7 @@ the firmware picks.
 - Do compute and transfer use register sets too? (Today they only use `CAT_BASE_INDEX`
   and that works.)
 
-#### Q16 — Loading the HWRTData into the PM, geometry phase
+#### Q16 — Loading the HWRTData into the PM, geometry phase (answered in `kick-geometry-ta.md` phase B and Q16b–Q16m; implemented E033–E043)
 
 Phase B says "the command's HWRTData is loaded into the PM, for the geometry buffer and
 for the list (MLIST)", then gives only the handshakes `CR[0x250]`/`CR[0x258]`. The sequence
@@ -658,7 +660,7 @@ itself is needed:
   reloaded from the HWRTData on later kicks?
 - **Order:** where do these writes go relative to the `0x250`/`0x258` handshakes?
 
-#### Q17 — Register-set values that come from state, not from the command
+#### Q17 — Register-set values that come from state, not from the command (answered in `kick-geometry-ta.md`; implemented E027/E028)
 
 The phase-C table names their sources only as "state":
 - `CR[set+0xC28]`, "context RTData address in the PM": which value exactly (an address
@@ -677,7 +679,7 @@ The phase-C table names their sources only as "state":
   `rgn_header_size`, `isp_mtile_size`): which of these does the firmware write, to which
   registers, and in the TA kick, the 3D kick, or both?
 
-#### Q18 — TA state buffer and context registers for a new (non-resumed) kick
+#### Q18 — TA state buffer and context registers for a new (non-resumed) kick (answered in `kick-geometry-ta.md`; implemented E028)
 
 Phase D lists `CR[set+0xCE0]`, `CR[set+0xCB0]` (poll), `CR[set+0xCB8] = 1`,
 `CR[set+0xC48]` and `CR[0xD20]` = state buffer address, without values.
@@ -691,7 +693,7 @@ Phase D lists `CR[set+0xCE0]`, `CR[set+0xCB0]` (poll), `CR[set+0xCB8] = 1`,
 - Which value is written to `BCAST[0x0408]`/`0x040C` and `CR[0x418]` (the free-list/ALIST
   broadcast of phase E)?
 
-#### Q19 — TA completion
+#### Q19 — TA completion (answered, Q19b in the Answered table; implemented E041/E042)
 
 - Events: completion is `TA_FINISHED` (bit 5, routed by `MTS_DM2`). Must the firmware also
   handle `TA_TERMINATE` (bit 6), and when does it occur?
@@ -705,9 +707,9 @@ Phase D lists `CR[set+0xCE0]`, `CR[set+0xCB0]` (poll), `CR[set+0xCB8] = 1`,
   MCU fence. Where does the "TPC flush" fit?
 - Is a PM "unload" or pause needed before the next TA of another HWRTData?
 
-### B. Fragment (3D) kick
+### B. Fragment (3D) kick (2026-11-09; all answered)
 
-#### Q20 — Loading the HWRTData into the PM, fragment phase, and PM deallocation
+#### Q20 — Loading the HWRTData into the PM, fragment phase, and PM deallocation (answered in `kick-compute-and-3d.md` and Q16k; implemented E037/E038, PM sync E049)
 
 Phase A says "Load the HWRTData into the PM (fragment phase)", and "pause the PM
 deallocation" for a partial render.
@@ -718,7 +720,7 @@ deallocation" for a partial render.
   (event `PM_3D_MEM_FREE`, bit 8), or does the firmware drive it? Which `rogue_fwif_freelist`
   fields does the firmware update, and how does `state` move (`FRAG_FINISHED`)?
 
-#### Q21 — Sources of the 3D registers
+#### Q21 — Sources of the 3D registers (answered in `kick-compute-and-3d.md`; implemented E038–E040)
 
 - **"Render target state":** where do `BCAST[0x3E40]`, `BCAST[0x0F18]`, `BCAST[0x0F28]`,
   the ZS pair `BCAST[0x0FA8/0x0FAC]`, and the 64-bit `BCAST[0x0F20/0x0F24]` of phase B come
@@ -740,7 +742,7 @@ deallocation" for a partial render.
 - Phase F says a normal 3D kick writes `CR[0x0298] = 0` and `CR[0x01C8] = 0`. Where in
   the sequence?
 
-#### Q22 — Combined geometry + fragment kick and interlocks
+#### Q22 — Combined geometry + fragment kick and interlocks (answered, see the Answered table)
 
 - For KCCB `COMBINED_GEOM_FRAG_KICK` (117), and for separate kicks on one render context:
   must the fragment wait for the TA of the same HWRTData to finish (state
@@ -749,9 +751,9 @@ deallocation" for a partial render.
   run at the same time (TA + 3D of different renders, 3D + compute)? What does
   `ROGUE_FRAG_FLAGS_PREVENT_CDM_OVERLAP` enforce?
 
-### C. Parameter buffer exhaustion (SPM)
+### C. Parameter buffer exhaustion (SPM) (2026-11-09; answered)
 
-#### Q23 — Out-of-memory, free-list grow, partial render, ZS backing
+#### Q23 — Out-of-memory, free-list grow, partial render, ZS backing (answered in `partial-render-spm.md`, Q28, Q30; implemented E037–E049 except on-demand ZS backing)
 
 `partial-render-spm.md` gives the protocol but no registers:
 - **Detecting OOM:** `PM_OUT_OF_MEMORY` (bit 7, `MTS_DM2`). How does the firmware tell
@@ -769,9 +771,9 @@ deallocation" for a partial render.
   `freelist_hwr_snapshot[]` and send in `FREELISTS_RECONSTRUCTION`, and what does it do
   on the reply?
 
-### D. Preemption
+### D. Preemption (2026-11-09; answered, not implemented)
 
-#### Q24 — Context store and resume (CDM, TA, 3D)
+#### Q24 — Context store and resume (CDM, TA, 3D) (answered in `scheduler.md` and `kick-compute-and-3d.md`; not implemented: `steps.md` phase 8, optional)
 
 - **When** does the firmware decide to store a running context (priority of a newly
   ready context, deadline, host request)?
@@ -786,8 +788,6 @@ deallocation" for a partial render.
 - **Resume sequence per DM:** for 3D the spec gives `CR[0x1020]`, `ISP_RENDER |= 0x10`,
   then `CR[0x0298]`/`CR[0x01C8]`. Please give the CDM and TA equivalents and how
   `fw_com_ctx_flags` (`NEED_RESUME`) is maintained.
-
-### E. Smaller items
 
 ## Answered
 
