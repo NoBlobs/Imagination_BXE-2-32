@@ -14,6 +14,17 @@
 
 #define SOFT_RESET_HWR_LO           0x13FFFC1Du
 #define SOFT_RESET_HWR_HI           0xFFEFFE00u
+#define SOFT_RESET_HWR_LO2          0x10610000u   /* second stage, ORed in */
+#define SOFT_RESET_HWR_HI2          0x00080004u
+
+/* no public names (hardware-recovery.md) */
+#define CR_BIF_STALL                0x1340
+#define CR_BIF_PENDING_A            0x1350
+#define CR_BIF_PENDING_B            0x1338
+#define CR_SLC_IDLE_A               0x03C8
+#define CR_SLC_IDLE_B               0x3898
+#define CR_TPU_FLUSH                0x1608
+#define CR_PM_PAGE_MANAGEOP         0x02A0
 
 /*
  * Watchdog: the context's max_deadline_ms (the mainline host sets 30 s; its
@@ -76,15 +87,30 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 	}
 	TRACE(SFID_HWR_61, hwr_counter);
 
-	/* 2. SLC flush/invalidate and wait for idle */
-	slc_flush_inval();
+	/*
+	 * 2. quiesce BIF/MMU/SLC (hardware-recovery.md "Detailed bus quiesce",
+	 * answer to Q29b item 4): stall requests, wait for the BIF and the SLC
+	 * to drain, invalidate the MMU caches.
+	 */
+	cr_write32(CR_BIF_STALL, cr_read32(CR_BIF_STALL) | 1);
+	if (!cr_poll32(CR_BIF_PENDING_A, 0xFF, 0, 10000) ||
+	    !cr_poll32(CR_BIF_PENDING_B, 0xFFFF, 0, 10000))
+		TRACE(SFID_DBG_2, 0xE0431340u);
+	cr_write32(CR_BIF_CTRL_INVAL, 0x1C);
+	write_barrier();
+	if (!cr_poll32(CR_SLC_IDLE_A, 0x20, 0x20, 10000) ||
+	    !cr_poll32(CR_SLC_IDLE_B, 0xFF, 0xFF, 10000))
+		TRACE(SFID_DBG_2, 0xE04303C8u);
 
 	/* 3. disable partial renders */
 	cr_write32(CR_PM_PARTIAL_RENDER_ENABLE, 0);
 
-	/* 4. soft-reset pulse of the GPU units (not the MIPS / MTS wrapper) */
+	/* 4. two-stage soft reset of the GPU units (not the MIPS / MTS wrapper) */
 	bcast_write32(CR_SOFT_RESET, SOFT_RESET_HWR_LO);
 	bcast_write32(CR_SOFT_RESET + 4, SOFT_RESET_HWR_HI);
+	write_barrier();
+	bcast_write32(CR_SOFT_RESET, SOFT_RESET_HWR_LO | SOFT_RESET_HWR_LO2);
+	bcast_write32(CR_SOFT_RESET + 4, SOFT_RESET_HWR_HI | SOFT_RESET_HWR_HI2);
 	(void)cr_read32(CR_SOFT_RESET);
 	udelay(10);
 	bcast_write32(CR_SOFT_RESET, 0);
@@ -92,10 +118,17 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 	(void)cr_read32(CR_SOFT_RESET);
 	TRACE(SFID_MAIN_27);
 
-	/* 5. re-initialise the units, event routing and the BIF catalogue */
+	/* 5. re-initialise the units, unstall the BIF, TPU and SLC clean-up, BIF catalogue */
 	gpu_power_on();
 	gpu_units_init();
+	cr_write32(CR_BIF_STALL, cr_read32(CR_BIF_STALL) & ~1u);
+	bcast_write32(CR_TPU_FLUSH, 0x78001);
+	cr_poll32(CR_TPU_FLUSH, 1, 0, 10000);
+	slc_flush_inval();
 	bif_rebuild();
+
+	/* PM allocation and deallocation unpaused */
+	bcast_write32(CR_PM_PAGE_MANAGEOP, cr_read32(CR_PM_PAGE_MANAGEOP) & ~3u);
 
 	/*
 	 * PM: the reset lost the PM state. Forget which HWRTData the PM contexts
@@ -107,8 +140,14 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 		fwaddr_t hwrts[2];
 		uint32_t n = 0;
 
-		if ((busy & (1u << DM_GEOM)) && dms[DM_GEOM].hwrt)
+		if ((busy & (1u << DM_GEOM)) && dms[DM_GEOM].hwrt) {
+			void *h = fwptr(dms[DM_GEOM].hwrt);
+
 			hwrts[n++] = dms[DM_GEOM].hwrt;
+			/* mid-TA context-store resume flag */
+			if (h)
+				hw_wr32(h, HWRT_FLAGS, hw_rd32(h, HWRT_FLAGS) & ~0x400u);
+		}
 		if ((busy & (1u << DM_FRAG)) && dms[DM_FRAG].hwrt)
 			hwrts[n++] = dms[DM_FRAG].hwrt;
 		frag_hwr_reset();

@@ -18,8 +18,6 @@
 #define CR_TPU_BORDER_COLOUR_CDM    0x17A8
 #define CR_MULTICORE_COMPUTE_CTRL   0xF330
 
-#define SLC_FLUSH_INVAL_ALL         0x1u
-#define SLC_STATUS_FLUSH_PENDING    0x4u
 
 static void dm_cache_flush(uint32_t dm);
 
@@ -106,6 +104,8 @@ void bif_rebuild(void)
 	cr_write32(CR_BIF_CTRL_INVAL, 0xF);
 }
 
+bool kick_defer;
+
 void kick_init(void)
 {
 	for (uint32_t s = 0; s < BIF_SLOTS; s++)
@@ -125,6 +125,7 @@ void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 	struct dm_state *s = &dms[dm];
 
 	s->busy = true;
+	s->keep = false;
 	s->ctx = ctxaddr;
 	s->cmd_off = cmd_off;
 	s->event_mask = evmask;
@@ -353,6 +354,7 @@ static void dump_words(uint32_t tag, const void *base, uint32_t bytes)
 bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
 {
+	kick_defer = false;
 	uint32_t id = hdr->cmd_type & 0x7FFF;
 
 	switch (id) {
@@ -381,8 +383,18 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		 * Runs only when the SPM armed a partial render for this HWRTData;
 		 * otherwise it is consumed without running (Q16m answer).
 		 */
-		if (spm_pr_armed(*(const uint32_t *)((const uint8_t *)payload + 4)))
-			return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off, true);
+		{
+			fwaddr_t hwrt = *(const uint32_t *)((const uint8_t *)payload + 4);
+
+			if (spm_pr_armed(hwrt))
+				return kick_frag(ctxaddr, ctx, hdr, payload, cmd_off, true);
+			/*
+			 * While this HWRTData's geometry still runs it may run out of
+			 * memory: keep FRAG_PR queued (its fence can already pass).
+			 */
+			if (dms[DM_GEOM].busy && dms[DM_GEOM].hwrt == hwrt)
+				kick_defer = true;
+		}
 		return false;
 #endif
 	default:
@@ -424,37 +436,36 @@ static void dm_cache_flush(uint32_t dm)
 {
 	bool frag = dm == DM_FRAG;
 
-	if (dm == DM_GEOM) {
-		/* geometry variant: only partly specified (Q19): 0x0688 = 1, 0x0668 = 5, SLC DM_TA */
-		bcast_write32(CR_FLUSH_FE, 1);
-		bcast_write32(CR_FLUSH_USC, 1);
-		cr_poll32(CR_FLUSH_USC, 1, 0, 10000);
-		bcast_write32(CR_FLUSH_PDS, 5);
-		cr_poll32(CR_FLUSH_PDS, 1, 0, 10000);
-		bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, 2);
-		cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
-		return;
-	}
-	if (dm != DM_FRAG && dm != DM_CDM) {
+	if (dm != DM_FRAG && dm != DM_CDM && dm != DM_GEOM) {
 		slc_flush_inval();
 		return;
 	}
+	static const struct {
+		uint32_t usc, pds, tpu, mcu_dm, f1720, slc;
+	} v[3] = {
+		/* geometry (answer to Q19b), fragment/transfer, compute */
+		{ 1, 5, 0x10001, 0x080, 0x27, 2 },
+		{ 2, 3, 0x38001, 0x180, 0x2B, 6 },
+		{ 4, 9, 0x10001, 0x280, 0x33, 8 },
+	};
+	uint32_t i = dm == DM_GEOM ? 0 : frag ? 1 : 2;
+
 	bcast_write32(CR_FLUSH_FE, 1);
-	bcast_write32(CR_FLUSH_USC, frag ? 2 : 4);
-	cr_poll32(CR_FLUSH_USC, frag ? 2 : 4, 0, 10000);
-	bcast_write32(CR_FLUSH_PDS, frag ? 3 : 9);
+	bcast_write32(CR_FLUSH_USC, v[i].usc);
+	cr_poll32(CR_FLUSH_USC, v[i].usc, 0, 10000);
+	bcast_write32(CR_FLUSH_PDS, v[i].pds);
 	cr_poll32(CR_FLUSH_PDS, 1, 0, 10000);
-	bcast_write32(CR_FLUSH_TPU, frag ? 0x38001 : 0x10001);
+	bcast_write32(CR_FLUSH_TPU, v[i].tpu);
 	cr_poll32(CR_FLUSH_TPU, 1, 0, 10000);
 	if (frag)
 		bcast_write32(CR_FLUSH_1480, 1);
 	bcast_write32(CR_FLUSH_1488, 1);
-	bcast_write64(CR_MCU_FENCE, frag ? 0x0000018000000000ull : 0x0000028000000000ull);
-	bcast_write32(CR_FLUSH_1720, frag ? 0x2B : 0x33);
+	bcast_write64(CR_MCU_FENCE, (uint64_t)v[i].mcu_dm << 32);
+	bcast_write32(CR_FLUSH_1720, v[i].f1720);
 	cr_poll32(CR_FLUSH_1728, 1, 0, 10000);
-	if (frag)
+	if (dm != DM_CDM)
 		write_barrier();
-	bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, frag ? 6 : 8);
+	bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, v[i].slc);
 	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
 }
 
@@ -476,15 +487,15 @@ void kick_events(uint32_t ev)
 		if (!s->busy || !(ev & s->event_mask))
 			continue;
 		cr_write32(CR_EVENT_CLEAR, s->event_mask);
+		if (d == DM_GEOM)
+			geom_done(s);   /* TPC flush before the cache flush */
 #ifdef EXP_SLC_ONLY_FLUSH
 		slc_flush_inval();      /* E023 control: the old SLC-only flush */
 #else
 		dm_cache_flush(d);
 #endif
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
-		if (d == DM_GEOM)
-			geom_done(s);
-		else if (d == DM_FRAG && s->hwrt)
+		if (d == DM_FRAG && s->hwrt)
 			frag_done(s);
 		TRACE(s->finish_sfid);
 		sched_dm_done(d);

@@ -19,16 +19,16 @@ unchanged: sources are `docsClean/` and our own experiments only.
 
 | Phase | State |
 |---|---|
-| 1 | `0x40A8`, `geom_caches_need_zeroing` (SLC flush only), PM slot tracking with store-before-evict and a dirty flag done. **TPC flush missing (Q19b)**: the input-attachment case still faults, and **the second render on a device stalls the TA (Q29)**. Shared-PB stays off. |
-| 2 | **Done**: rendering runs by default (`EXP_NO_RENDER` to disable), bring-up knobs removed. Stage C run stage by stage: all pass except `copy_and_blit` 19/23 (NPOT, Q25). Stage B: `xfer`, `pre-cdm` pass; `pre-3d`/`pre-ta` blocked on Q29. The interleaved-context board hang is fixed. |
+| 1 | Done (E041–E043): PM slots, TA-finished TPC/RTC flush, full geometry flush, RTC programming, PM-MMU invalidation, first-kick PM reset pulses. **The second HWRTData works** (`pre-3d`, `pre-ta` pass). CPU zeroing of TPC/RTC after HWR not done (SLC flush instead). |
+| 2 | Stages A and C pass. Stage B now runs the pixel-checking `vkfwtest` (E044): `pre-cdm`, `xfer` pass; `multiframe`, `pre-ta`, `bigpb` **fail on wrong pixels** (second HWRTData and post-OOM renders write nothing). Stage D (`vkfwtest xfer` after suspend) passes after stage A; it fails after compute/sync suites (E043). |
 | 3 | Non-first kicks, `owner_geom`, HWRTData states done; no workload exercising them yet. |
-| 4 | Ready pages, grow request/update, partial-render arming and `FRAG_PR` written. The ready-pages update matches the reference, but **the TA does not resume (Q28)**, so grow/PR are untested. ZS backing not done. |
-| 5 | Reconstruction request, HWRTData `HWR` state, PM reset on HWR done; not exercised yet. |
+| 4 | Ready pages, grow, TA stop/resume, `FRAG_PR` via the SPM failing-UFO check: **the first partial render of a frame runs and the TA restarts**; the second restart faults (Q30). ZS backing not done. |
+| 5 | Full HWR teardown done (E043). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`** (stage E requires it). |
 | 6 | BIF/PM state reset at `POW_OFF`, `kick_init()` at boot; barriers already in place. Stage D passes. |
-| 7 | Blocked on Q27; version stays 1.0. |
+| 7 | Q27 answered (`fab1fc9`: per-layer region headers, PBE, ZLS, layer loop at `PIXELBE_END_RENDER`); not implemented yet, version stays 1.0. |
 | 8 | Not started (optional). |
 | 9 | Trace argument check done; others open. |
-| 10 | `fw-preflight.py`, `oracle.sh`, `check-trace-args.py` done; full oracle pending. |
+| 10 | `fw-preflight.py`, `oracle.sh` (stage B/D on `vkfwtest`, `new_trace`), `check-trace-args.py`, **`vkfwtest`** (own repository, `tools/deploy.sh vkfwtest`) done. |
 
 ---
 

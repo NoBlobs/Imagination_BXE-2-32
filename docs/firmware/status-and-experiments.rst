@@ -51,29 +51,30 @@ What works
        notification decoded by host (:exp:`E025`)
    * - 3D rendering (default since :exp:`E041`)
      - ``simple_draw`` **4/4**, ``api.smoke`` **8/8**, ``basic_draw``
-       **203 pass / 0 fail** (128 not supported), depth load/store
-       (:exp:`E038`, :exp:`E041`)
+       **203 pass / 0 fail** (128 not supported), depth load/store,
+       out-of-memory grow and resume (:exp:`E038`, :exp:`E041`, :exp:`E042`)
 
 Open items and next steps
 =========================
 
-* **Second render on a device**: the TA of the second render stalls, and
-  every later TA stalls too, although the free lists load the same values
-  (``vkfwtest pre-3d``, Q29). Most likely the same gap as the
-  input-attachment fault: the TPC flush and cache zeroing at geometry
-  completion (Q19b) (:exp:`E041`).
-* **Other rendering gaps**: out-of-memory handling adds pages like the
-  reference but the TA does not resume (Q28), so big scenes lock up and
-  recover; layered rendering and firmware 1.1 wait on Q27 (:exp:`E041`,
-  ``docs/steps.md``).
-* **Acceptance oracle** (:exp:`E041`): stage A and D pass; stage C passes
-  except the four NPOT copies (Q25); stage B ``xfer`` and ``pre-cdm`` pass,
-  ``pre-3d``/``pre-ta``/``bigpb`` wait on Q29/Q28. The board hang with
-  interleaved render contexts is fixed.
+* **Renders that write nothing** (:exp:`E044`, found by ``vkfwtest``):
+  renders on the second HWRTData of a pair, and renders whose geometry ran
+  out of parameter memory, complete without any fault but leave the image
+  unchanged. ``multiframe``, ``pre-ta`` and ``bigpb`` fail; ``pre-cdm`` and
+  ``xfer`` pass.
+* **Partial renders**: the first partial render of a frame runs and the TA
+  restarts; the restart after the second one faults, and one restart variant
+  hung the board (Q30, :exp:`E043`). ``bigpb`` passes up to 2 M triangles.
+* **Render-target arrays / firmware 1.1** (Q27): answered, not implemented.
+* **Acceptance oracle** (:exp:`E043`): stages A and C pass; stage B passes
+  except ``bigpb`` frame 3 (Q30). The second HWRTData of a dataset and the
+  input-attachment renders work since :exp:`E043`.
+* **Runtime suspend after compute/sync work**: after
+  ``compute.pipeline.basic`` or ``synchronization.basic`` the firmware keeps
+  reporting ON and the GPU never suspends (stage D fails when run after
+  stage C); present since at least :exp:`E041`.
 * **Stability run**: repeat ``tools/stab-run.sh`` (interrupted by external
   reboot in :exp:`E026`).
-* **Offset/NPOT/mirror transfer edge cases**: investigate
-  ``buffer_to_buffer_with_offset`` (host-side / Q25).
 
 Clean-room rules
 ================
@@ -263,3 +264,18 @@ Experiment index (``docs/logRefs/``)
      - Rendering by default, PM module, SPM, tools
      - Default build draws; oracle C/D pass (NPOT aside); hang fixed; OOM
        resume (Q28) and second render (Q29) open
+   * - :exp:`E042`
+     - 2026-11-27
+     - Spec ``fab1fc9``: init defaults, TPC flush, OOM resume
+     - ``copy_and_blit`` 23/23; ``bigpb`` frame 0 completes; second HWRTData
+       still fails (Q29b)
+   * - :exp:`E043`
+     - 2026-11-27
+     - PM-MMU invalidation, first-kick PM reset, HWR teardown
+     - ``pre-3d``/``pre-ta`` and input attachments pass; stage C complete;
+       first partial render runs; one variant hung the board (Q30)
+   * - :exp:`E044`
+     - 2026-11-27
+     - ``vkfwtest`` pixel-checking harness
+     - ``pre-cdm``, ``xfer``, stage D pass; second-HWRTData and post-OOM
+       renders write nothing

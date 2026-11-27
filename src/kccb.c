@@ -82,6 +82,7 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 	case KCCB_LOGTYPE_UPDATE:     /* log_type is read live from the trace control */
 	case KCCB_HEALTH_CHECK:
 	case KCCB_BP:
+		break;
 	case KCCB_FREELIST_GROW_UPDATE:
 		spm_grow_update(cmd->data.grow.freelist_fw_addr, cmd->data.grow.delta_pages,
 				cmd->data.grow.new_pages, cmd->data.grow.ready_pages);

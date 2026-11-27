@@ -6,6 +6,8 @@
 #
 #   tools/deploy.sh fw       install only the firmware (/lib/firmware/updates/powervr)
 #   tools/deploy.sh kernel   build + install kernel, modules, dtb, initrd, GRUB entry
+#   tools/deploy.sh vkfwtest copy the vkfwtest sources (VKFWTEST_SRC) to the board
+#                            and build them there (~/vkfwtest-clean/build/vkfwtest)
 #
 # The GRUB entry passes modprobe.blacklist=powervr: the driver is never loaded
 # automatically and is loaded by hand (tools/gpu-test.sh) after boot.
@@ -19,6 +21,7 @@ SSH="ssh -o UserKnownHostsFile=$KH $BOARD"
 SCP="scp -q -o UserKnownHostsFile=$KH"
 KMAKE="make -C $LINUX ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- LOCALVERSION="
 FW=$HERE/build/rogue_36.29.52.182_v1.fw
+VKFWTEST_SRC=${VKFWTEST_SRC:-$HERE/../vkfwtest}   # the vkfwtest repository
 
 deploy_fw() {
 	make -C "$HERE/src"
@@ -73,8 +76,18 @@ EOF
 		sudo grep -n menuentry $cfg"
 }
 
+# The board has no rsync: send a tarball and build natively (GCC, libvulkan,
+# glslangValidator are installed there).
+deploy_vkfwtest() {
+	[ -f "$VKFWTEST_SRC/Makefile" ] || { echo "no vkfwtest sources in $VKFWTEST_SRC"; exit 1; }
+	tar -C "$VKFWTEST_SRC" --exclude=build --exclude=.git -czf - . |
+		$SSH "rm -rf ~/vkfwtest-clean && mkdir -p ~/vkfwtest-clean && tar -C ~/vkfwtest-clean -xzf - &&
+		      make -s -C ~/vkfwtest-clean && ~/vkfwtest-clean/build/vkfwtest --version"
+}
+
 case "${1:-}" in
 fw) deploy_fw ;;
 kernel) deploy_kernel ;;
-*) echo "usage: $0 fw|kernel" >&2; exit 1 ;;
+vkfwtest) deploy_vkfwtest ;;
+*) echo "usage: $0 fw|kernel|vkfwtest" >&2; exit 1 ;;
 esac

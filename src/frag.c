@@ -130,6 +130,7 @@ static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 	pm_slot_evict(PM_CTX_FRAG, hwrt_fw);
 
 	pm_select(PM_CTX_FRAG);
+	pm_mmu_inval();
 	pm_load_lists(PM_CTX_FRAG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
 		      rd64(hwrt, HWRT_VCE_LAST_CAT_BASE), rd64(hwrt, HWRT_TE_LAST_CAT_BASE),
 		      rd64(hwrt, HWRT_ALIST_LAST_CAT_BASE), rd64(hwrt, HWRT_ALIST_SP),
@@ -153,6 +154,7 @@ static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 static void frag_pm_load_pr(const uint8_t *hwrt)
 {
 	pm_select(PM_CTX_FRAG);
+	pm_mmu_inval();
 	pm_load_lists(PM_CTX_FRAG, rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR),
 		      cr_read64(CR_BIF_PM_CAT_BASE_VCE0), cr_read64(CR_BIF_PM_CAT_BASE_TE0),
 		      cr_read64(CR_BIF_PM_CAT_BASE_ALIST0), cr_read32(CR_PM_ALIST_SP_LIVE0),
@@ -272,10 +274,12 @@ void frag_done(struct dm_state *s)
 	cr_write32(CR_EVENT_CLEAR, EV_PM_3D_MEM_FREE);
 	if (!freed)
 		TRACE(SFID_DBG_2, 0xE0410D01u);
+	pm_mmu_inval();         /* every 3D finished (kick-geometry-ta.md B step 3) */
 
 	if (frag_is_pr) {
 		frag_is_pr = false;
 		spm_pr_done();
+		s->keep = true;         /* FRAG_PR may run again in this frame */
 		if (hwrt)
 			TRACE(SFID_MAIN_2, RTDATA_STATE_PARTIALRENDERFINISHED, 0u);
 		s->hwrt = 0;

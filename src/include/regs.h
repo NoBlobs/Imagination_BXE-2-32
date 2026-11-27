@@ -34,6 +34,8 @@
 #define CR_BIF_FAULT_BANK0_MMU_STATUS   0x12B0
 #define CR_SLC_CTRL_FLUSH_INVAL         0x3818
 #define CR_SLC_STATUS0                  0x3820
+#define SLC_FLUSH_INVAL_ALL             0x1u
+#define SLC_STATUS_FLUSH_PENDING        0x4u
 #define CR_SCRATCH15                    0x1A78
 #define CR_MULTICORE_SYSTEM             0xF308
 

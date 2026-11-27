@@ -146,22 +146,29 @@ Passed via ``make -C src -B EXP="-DNAME[=value]"``:
    * - ``EXP_SHARED_PB``
      - Shared free lists between the PM contexts (``CONTEXT_PB_BASE = 0``,
        no reload) when PM context 1 holds the same free lists; off by
-       default since it hung the board in :exp:`E040`
+       default since it hung the board in :exp:`E040` (it no longer does
+       in :exp:`E042`, but does not fix Q29b either)
+   * - ``EXP_PR_FULL_INVAL``
+     - Full PM-MMU invalidation (SLC, BIF, PM TLB) in the restart after a
+       partial render, as the spec reads; it hung the board in
+       :exp:`E043`, so the default writes ``0x1348`` only (Q30)
    * - ``EXP_MEM_FREE_US``
      - Wait timeout in µs for ``PM_3D_MEM_FREE`` after a render (default
        ``3000``; :exp:`E038`)
-   * - ``EXP_RESUME=n``
-     - What the firmware does after adding pages at an out-of-memory event:
-       ``1`` clear ``PM_OUT_OF_MEMORY`` again (default), ``2`` also
-       re-issue the TA run register; neither resumes the TA (:exp:`E041`)
 
 The knobs of the PM bring-up (:exp:`E028`–:exp:`E040`: ``EXP_TA``,
 ``EXP_CANARY``, ``EXP_HS_MODE``, ``EXP_PM_*``, ``EXP_CLK_ON``, ``EXP_SP32``,
-``EXP_20F8_EDGE``, ``EXP_0388``, ``EXP_TOP_FIRST``, ``EXP_F320``,
+``EXP_20F8_EDGE``, ``EXP_0388``, ``EXP_RESUME`` (:exp:`E042`), ``EXP_TOP_FIRST``, ``EXP_F320``,
 ``EXP_UNIT_EXTRA``, ``EXP_IDX_AFTER``, ``EXP_NO_FL_LOAD``, ``EXP_*_SP_CMD*``,
 ``EXP_FLAGS_AFTER_SP``, ``EXP_FRAG_*``, ``EXP_MTILE_STRIDE``,
 ``EXP_FRAG_DUMP``) were removed in :exp:`E041`, when the working sequence
 became the code. The experiment pages describe what each one did.
+
+Test harness
+============
+
+``tools/deploy.sh vkfwtest`` builds the ``vkfwtest`` Vulkan harness (repository
+``../vkfwtest``) on the board; see :doc:`test-harness`.
 
 Build-time checks
 =================

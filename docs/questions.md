@@ -28,7 +28,85 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q29 — Why does the second render on a device stall the TA? (blocking for every app that draws more than once)
+#### Q30 — Restart after the second partial render on the same HWRTData (blocking for big scenes)
+
+[E043](logRefs/E043-pm-mmu-inval-first-kick-reset-hwr.md), `vkfwtest bigpb` frame 3 (4 M
+triangles). The partial render now runs:
+- `FENCE_PR` is passed through the SPM failing-UFO check without being consumed;
+- the `FRAG_PR` is kicked with PM context 1 = the geometry's current catalogues and SPs,
+  `0x0338 = 1`, `pds_pr_bgnd`, no ZLS.
+
+**The first one works**:
+- `PR executed`;
+- the restart: `0x0338 = 0`, slot 1 dropped, state 1, context-0 select, `0x0290`,
+  `0x0198`, `0x1348`, `0x01B8` + poll, `0x0328`, `0x0CA8`;
+- the TA continues until the next OOM.
+
+The **second** partial render on the same HWRTData runs (14 ms). At its restart:
+- the `0x01B8` poll times out;
+- a BIF0 page fault follows (MMU status `0x1021`, request `0x0011f08001008ff0`).
+
+With the full PM-MMU invalidation in the restart (SLC `0x10`, `BIF_CTRL_INVAL = 4`,
+`0x1348`, each polled) instead of `0x1348` alone, **the board hung**.
+
+1. The exact restart sequence after a partial render, with polls and order. In
+   particular:
+   - what "save the 3D PM context's catalogue bases" writes, and where;
+   - is the PM-MMU invalidation in the restart the full three-step one, or `0x1348` only?
+2. Before the second partial render's `FRAG_PR`, does PM context 1 take the geometry's
+   catalogues again, or does it continue from the first partial render's state?
+3. What should `0x01B8` wait for, and what does the reference do when it does not clear?
+4. Partial renders of a render pass with a depth attachment: which ZLS values does the
+   `FRAG_PR` use (the reference's `ZSBUFFER_BACKING`)? Is it the command's ZLS registers
+   with load/store forced, or nothing?
+
+#### Q29b — The second HWRTData of a render-target dataset still fails (answered in `d244503`, fixed in E043)
+
+[E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md). The Q29 answer is implemented:
+- the TA-finished sequence: VHEAP store, TPC flush `0x0C50` with its poll, RTC flush;
+- the full geometry cache flush;
+- RTC programming (`0x0CB0 = 0`, `0x0CE0 = 1/3`, `0x0CB8 = 1`, `0x0D20`);
+- `0x0C68` on first kicks only.
+
+None of the new polls times out. Repeated renders on **one** HWRTData work (many per
+device in `basic_draw`). Every render on the **second** HWRTData of a dataset fails:
+- `vkfwtest pre-3d` render 2 (`RTD 0xc0138000`): the TA takes 21 local pages and stalls:
+  - `0x0D00 = 0x0F`;
+  - no `PM_OUT_OF_MEMORY`;
+- `vkfwtest bigpb` frame 1 (`RTD 0xc00bc000`): BIF0 page fault in the TA at once:
+  - MMU status `0x8001`;
+  - request status `0x00006e0002b3a000`;
+- `renderpass1…d32_sfloat.input.clear.dont_care.draw`: the TA of the second HWRTData
+  finishes, then the 3D faults on the IPF read at `0x2000` (request
+  `0x0010250000002000`).
+
+With `CONTEXT_PB_BASE = 0` and no free-list reload, as the reference does for the second
+HWRTData, `pre-3d` render 2 still stalls.
+
+Per HWRTData we write:
+- MLIST base `0x02D8`;
+- `PM_CAT_BASE_*0` = the HWRTData's `*_cat_base` (0 from the host);
+- list SPs 0;
+- free lists;
+- region headers `0x0C38` (`+0x80` from HWRTData 0, as the reference);
+- TPC `0x0C40` (shared);
+- VHeap table `0x0248` (shared);
+- VDM stream base `0x0408`;
+- `te_psg`, `ppp_ctrl` from the command.
+
+1. Is anything per HWRTData written that we do not write: a register, or a firmware write
+   to HWRTData / HWRTData-common / region-header memory before the first kick of
+   HWRTData 1?
+2. Does the reference select which HWRTData of the pair is active (the trace prints
+   `HWRTData0State` / `HWRTData1State`)? Where does it get the pair from, and does it
+   write the index anywhere (`te_psg`, `0x0D20`, a PM register)?
+3. In `pre-3d` on the reference: the trace lines and the register writes from `3D
+   finished` of render 1 to `Kick TA` of render 2 (RTD of HWRTData 1).
+4. After a lockup and HWR on a render, every later TA on the device stalls, also on
+   HWRTData 0. What does recovery reset in the PM/TA besides the `SOFT_RESET` pulse
+   (`Zero RTC for FWCtx`, free-list reconstruction, `0x0D20`, …)?
+
+#### Q29 — Why does the second render on a device stall the TA? (answered in part in `fab1fc9`, implemented in E042; still failing, see Q29b)
 
 [E041](logRefs/E041-render-default-and-spm.md), `vkfwtest pre-3d`. One device draws the same
 quad several times, and Mesa alternates the two HWRTData of the render-target dataset.
@@ -68,40 +146,7 @@ From then on **every** geometry kick stalls, also:
    as for the second HWRTData of a render pass). Is a reload with `0x3` and identical
    values expected to work?
 
-#### Q28 — What resumes the TA after an out-of-memory event? (blocking for big scenes)
-
-[E041](logRefs/E041-render-default-and-spm.md) implements the out-of-memory paths of
-`partial-render-spm.md`. On `vkfwtest bigpb`:
-- the first `PM_OUT_OF_MEMORY` is handled exactly like the reference:
-  - `0x02A0 = 1`, poll `0x02A8` = 1;
-  - global bank `0x20B8` base `…48900` → `…48800`, `+0x08` = live + 64, then the load
-    command `0x20B0`, so the live `0x20C8` goes 7 → `0x47`;
-  - `0x02A0 = 0`, poll `0x02A8` = 0;
-- trace: `Freelist update completed … old 0x1c0, new 0x200`, then
-  `OOM: Resumed TA with ready pages … SP : 71`.
-
-But **the TA never resumes**. Until the 30 s deadline:
-- the live global SP stays `0x47`;
-- the local live SP stays 2;
-- `0x0D00` = 1;
-- no further `PM_OUT_OF_MEMORY` is raised.
-
-These made no difference:
-- clearing `PM_OUT_OF_MEMORY` again after the update;
-- writing the TA run register `0x0400 = 1` again.
-
-The host's `FREELIST_GROW` and `FREELIST_GROW_UPDATE` round trip works, and the grown
-pages are held for the next out-of-memory event.
-
-1. After the free-list update at an out-of-memory event, which register write (likely a
-   self-clearing command, like the load commands) makes the PM and TA continue? In
-   which order relative to the pause and unpause?
-2. Is it the same step after a grow update that the geometry waited for (`SPM State =
-   wait for grow` → `Resume TA without partial render`)?
-3. When `PM_OUT_OF_MEMORY` is raised, does the firmware read any register to learn
-   which free list ran out (local or global), or does it always extend the global one?
-
-#### Q27 — What does firmware 1.1 change for render-target arrays (`gs_rta_support`)?
+#### Q27 — What does firmware 1.1 change for render-target arrays (`gs_rta_support`)? (answered in `fab1fc9`; implementation pending)
 
 Mesa MR 40973 enables `gs_rta_support` only for firmware 1.1 or later, and the acceptance
 oracle expects `FW version v1.1`. We keep reporting 1.0 until we implement what 1.1
@@ -111,21 +156,7 @@ changes. In the same form as the other answers:
 2. per-layer region headers and PBE addressing, if the firmware takes part in them;
 3. any other firmware-visible difference between the v1.0 and v1.1 open images.
 
-#### Q19b — The TPC flush and the full geometry completion flush
-
-The spec says geometry completion "flushes the TPC". Our geometry variant of the completion
-flush is only `0x4000 = 1`, `0x0688 = 1` (poll), `0x0668 = 5` (poll), SLC `DM_TA`. The second
-HWRTData of an input-attachment render pass shares the TPC with the first, and its fragment
-still faults on an IPF read at `0x2000` ([E040](logRefs/E040-input-attachment-dump-diff.md),
-E041).
-1. Which register and value flush the TPC, and when (TA completion, or before the
-   fragment kick of the next HWRTData)?
-2. The full geometry variant of the completion flush, in the same form as the
-   fragment/compute table of `kick-compute-and-3d.md`.
-3. Phase D: which registers clear the RTC and TA caches when
-   `geom_caches_need_zeroing` is set?
-
-#### Q16n — Input-attachment render: state outside the dumped ranges
+#### Q16n — Input-attachment render: state outside the dumped ranges (resolved by the Q29b answer: `d32_sfloat.input.*` 72/72 in E043)
 
 Our second render now matches `input-attachment-dump.md` in every dumped range
 ([E040](logRefs/E040-input-attachment-dump-diff.md)), and the shared-PB rule
@@ -578,39 +609,14 @@ deallocation" for a partial render.
 
 ### E. Smaller items
 
-#### Q25 — Transfer cases that still fail
-
-These cases fail deterministically, and adding the full DM 3 flush before every TQ does
-not change them ([E026](logRefs/E026-slcflush-copy-and-blit-stability.md)):
-- `api.copy_and_blit.core.buffer_to_buffer_with_offset.*`: all 64, with off-by-one byte
-  values;
-- `image_to_image.simple_tests.partial_image_npot_*`;
-- `image_to_buffer…buffer_offset_relaxed_r8_unorm`, `whole_unaligned`;
-- `blit_image.simple_tests.mirror_subregions.*`.
-
-Does the firmware use any `rogue_fwif_cmd_transfer` field that ours ignores? Candidates:
-- `flags` bits other than `SINGLE_CORE`;
-- `isp_xtp_pipe_enable`;
-- the third PBE word per render target;
-- a different number of render targets.
-
-Or is a transfer kick fully described by the Q13 table, so that these failures come from
-the host side?
-
-#### Q26 — KCCB commands still treated as no-ops
-
-What must the firmware do for:
-- `NOTIFY_WRITE_OFFSET_UPDATE` (114): resume a context whose cCCB grew without a KICK?
-- `OS_ONLINE_STATE_CONFIGURE` (118);
-- `REGCONFIG` (200), `BP` (103, shader breakpoints);
-- `PHR_CFG` (213), `WDG_CFG` (215)?
-
-The mainline host may not send them today, but a complete firmware should handle them.
-
 ## Answered
 
 | Q | Answer | Where |
 |---|---|---|
+| Q29 / Q29b second HWRTData | PM-MMU invalidation (SLC `0x10`, `BIF_CTRL_INVAL = 4`, `0x1348`) at every first kick, HWRTData switch and 3D finished; first-kick `0x0258` + PM reset pulses `0x0290`/`0x0198`; full HWR teardown. **Implemented: `pre-3d`, `pre-ta` pass.** | `docsClean/kick-geometry-ta.md`, `hardware-recovery.md`; [E043](logRefs/E043-pm-mmu-inval-first-kick-reset-hwr.md) |
+| Q19b TPC flush, geometry flush, cache zeroing | TA finished: `0x0260` VHEAP store, `0x0C50 = 0x40000000` + poll, RTC flush `0x0CB8 = 2`; full DM 2 flush column; zeroing via CPU + `0x0258`/`0x0250`. **Implemented** (CPU zeroing replaced by an SLC flush). | `docsClean/kick-geometry-ta.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
+| Q25 NPOT copies | GPU-init step 9 TPU/PBE/ISP defaults (`0x17B8` mode, `0x1780`, …). **Implemented: `copy_and_blit` 23/23.** | `docsClean/boot-gpu-init.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
+| Q28 OOM resume | `0x0328 = 1` after the paused update; stop with `0x0320`/`0x0CF0`, resume with `0x0328` + `0x0CF8`; PR restart sequence; always the global list. **Implemented: `bigpb` frame 0 completes.** | `docsClean/partial-render-spm.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
 | Q1 MTS init / event routing | `MTS_DMn_INTERRUPT_ENABLE` (DM0 `0x89200`, DM2 `0xA0`, DM3 `0x08`, DM4 `0x04`), `EVENT_ENABLE = 0`, `INTCTX = 0xFFFF`, `BGCTX = 1`. **Implemented**, but see Q9. | `docsClean/boot-gpu-init.md` B/C; [E011](logRefs/E011-event-enable-0x0128.md) |
 | Q2 device info | values of the open image (SLC 16 KiB, 6 ERNs, `LAYOUT_MARS`, `XE_MEMORY_HIERARCHY`, …). **Implemented** in `tools/mkfw.py`. | `docsClean/memory-model.md`; [E001](logRefs/E001-sys-bus-secure-reset.md) |
 | Q3 remap order | low word, high word, read back the high word. **Implemented.** | `docsClean/memory-model.md` |

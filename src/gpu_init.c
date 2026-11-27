@@ -135,8 +135,8 @@ void gpu_units_init(void)
 	bcast_write64(CR_USC_EXEC_BASE1, si->usc_exec_base);
 	bcast_write64(CR_USC_EXEC_BASE2, si->usc_exec_base);
 
-	/* 6. unit defaults (FW-only configuration, values from the spec) */
-	static const struct { uint16_t off; uint32_t val; } defaults[] = {
+	/* 6. unit defaults, part 1: before the init-done polls */
+	static const struct { uint16_t off; uint32_t val; } defaults1[] = {
 		{ 0x18C0, 0x007FC000 }, { 0x18C8, 0x007FC000 },
 		{ 0x18D0, 0x007FC000 }, { 0x18E0, 0x007FC000 },
 		{ 0x0600, 0x403F3F00 }, { 0x0604, 0x00800000 },
@@ -145,14 +145,9 @@ void gpu_units_init(void)
 		{ 0x0720, 0x0000000F },
 		{ 0x0640, 0x9 }, { 0x0698, 0xB }, { 0x0630, 1 }, { 0x0658, 0xB },
 		{ 0x06C0, 0xD }, { 0x0648, 1 }, { 0x0608, 1 },
-		{ 0x18E8, 0xF }, { 0x18F0, 0xF }, { 0x18F8, 0xF }, { 0x1900, 0xF },
-		{ 0x1498, 1 }, { 0x0700, 1 },
-		{ 0x0358, 5 },
-		{ 0x20F8, 1 }, { 0x2010, 0 }, { 0x2100, 0 },
-		{ 0x13F8, 7 },
 	};
-	for (uint32_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++)
-		bcast_write32(defaults[i].off, defaults[i].val);
+	for (uint32_t i = 0; i < sizeof(defaults1) / sizeof(defaults1[0]); i++)
+		bcast_write32(defaults1[i].off, defaults1[i].val);
 
 	/* 7. init-done handshakes */
 	bcast_write32(CR_INIT_DONE_A, 1);
@@ -164,10 +159,47 @@ void gpu_units_init(void)
 	if (!cr_poll32(CR_INIT_DONE_D, 1, 0, 10000))
 		ok = false;
 
-	/* 8. TPU filter mode */
-	bcast_write32(CR_TPU_FILTER_MODE, si->filter_flags);
+	/* 8. unit defaults, part 2: after the init-done polls */
+	static const struct { uint16_t off; uint32_t val; } defaults2[] = {
+		{ 0x18E8, 0xF }, { 0x18F0, 0xF }, { 0x18F8, 0xF }, { 0x1900, 0xF },
+		{ 0x1498, 1 }, { 0x0700, 1 },
+		{ 0x0358, 5 },
+		{ 0x20F8, 1 }, { 0x2010, 0 }, { 0x2100, 0 },
+		{ 0x13F8, 7 },
+	};
+	for (uint32_t i = 0; i < sizeof(defaults2) / sizeof(defaults2[0]); i++)
+		bcast_write32(defaults2[i].off, defaults2[i].val);
 
-	/* 9. per-core index registers: single core, nothing to do */
+	/*
+	 * 9. TPU filter/truncation mode and the TPU/PBE/ISP/TE unit defaults
+	 * (boot-gpu-init.md step 9; texture rounding, the TQ_3D NPOT copies).
+	 * Mode 8 unless only filter_flags bit 3 is set (mode 4); bit 1 forced.
+	 */
+	{
+		uint32_t f = si->filter_flags;
+		uint32_t mode = (!(f & 0x4) && (f & 0x8)) ? 4 : 8;
+
+		bcast_write32(CR_TPU_FILTER_MODE, mode);
+		bcast_write32(CR_TPU_FILTER_MODE, cr_read32(CR_TPU_FILTER_MODE) | 2);
+	}
+	static const struct { uint16_t off; uint32_t val; } defaults3[] = {
+		{ 0x1780, 0x21 },
+		{ 0x0C90, 0x3089705F }, { 0x0C94, 0x3089705F },
+		{ 0x1500, 0x80 },
+		{ 0x1710, 0x90000000 }, { 0x1714, 0 },
+		{ 0x0C78, 0x88 },
+		{ 0x0708, 1 },
+		{ 0x0FA0, 0x88 },
+		{ 0x06B0, 0 }, { 0x0470, 0 }, { 0x0240, 0 },
+		{ 0x0244, 0x80 },
+		{ 0x1788, 0x20 }, { 0x178C, 0x20 },
+	};
+	for (uint32_t i = 0; i < sizeof(defaults3) / sizeof(defaults3[0]); i++)
+		bcast_write32(defaults3[i].off, defaults3[i].val);
+	for (uint32_t i = 0; i < 16; i++)
+		bcast_write32(0x15A0 + 4 * i, 0);
+
+	/* 10. per-core index registers: single core (core 0 -> 0), reset value */
 
 	/* read-backs for the host-side sampler */
 	cr_write32(CR_DBG_UNITS_PDS, cr_read32(CR_PDS_EXEC_BASE + 4));

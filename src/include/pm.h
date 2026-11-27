@@ -46,7 +46,11 @@ static_assert(sizeof(struct pm_freelist) == 0x40);
 #define HWRT_STATE               0x0AC
 #define HWRT_FREELISTS           0x0B0
 #define HWRT_VHEAP_TABLE         0x0C8
-#define HWRT_RTA_CTL             0x0D0
+#define HWRT_RTA_CTL             0x0D0   /* render_target_index */
+#define HWRT_RTA_CURRENT         0x0D4
+#define HWRT_RTA_ACTIVE          0x0D8
+#define HWRT_RTA_VALID_RTS       0x0E0
+#define HWRT_RTA_MAX_RTS         0x0E8
 #define HWRT_TAIL_PTRS           0x0F0
 #define HWRT_MACROTILE_ARRAY     0x0F8
 #define HWRT_RGN_HEADER          0x100
@@ -109,6 +113,10 @@ void pm_select(uint32_t ctx);
 bool pm_load_freelist(uint32_t ctx, uint32_t which, const struct pm_freelist *fl);
 /* Copy a context's live free-list state back into the free list. */
 void pm_store_freelist(uint32_t ctx, uint32_t which, struct pm_freelist *fl);
+/* Catalogues and MLIST base of a context, without the stack-pointer pulses. */
+void pm_load_bases(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist);
+/* PM-MMU / PM-TLB invalidation. */
+void pm_mmu_inval(void);
 /* Catalogues, MLIST base and ALIST/MLIST stack pointers of a context. */
 void pm_load_lists(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist,
 		   uint64_t alist_sp, uint32_t mlist_sp);
@@ -131,6 +139,7 @@ enum spm_state { SPM_NONE, SPM_WAIT_GROW, SPM_WAIT_HW, SPM_PR_RUNNING };
 void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence);
 void spm_oom(void);
 bool spm_pr_armed(fwaddr_t hwrt);
+bool spm_pr_fence_ok(const struct ufo *u);
 void spm_pr_started(void);
 void spm_pr_done(void);
 void spm_grow_update(fwaddr_t fl_addr, uint32_t delta, uint32_t new_pages, uint32_t ready);

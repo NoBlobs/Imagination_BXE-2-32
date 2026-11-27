@@ -199,8 +199,19 @@ old behaviour); developed in :exp:`E027`–:exp:`E041`:
   without the dirty flag, a stale store overwrote the freed pages. Every load
   and store emits the reference's ``Load Freelist`` / ``Store Freelist``
   trace lines.
-* **Out-of-memory** (``src/pm.c``, :exp:`E041`): ``PM_OUT_OF_MEMORY`` while
-  the geometry runs adds ready pages inside a ``PM_PAGE_MANAGEOP`` pause,
-  requests a grow (FWCCB ``FREELIST_GROW``), or arms a partial render
-  (``FRAG_PR``). The TA does not resume yet (Q28).
-* **Known gap**: the second render on a device stalls the TA (Q29).
+* **TA finished** (``geom_done``, :exp:`E042`): VHEAP store (not on a last
+  kick), TPC flush ``0x0C50`` with its poll, RTC flush when an RTC is
+  programmed, then the full geometry cache flush before retirement.
+* **Out-of-memory** (``src/pm.c``, :exp:`E041`, :exp:`E042`): the global free
+  list is extended. Ready pages are added inside a ``PM_PAGE_MANAGEOP``
+  pause and the TA resumes with ``0x0328``; without ready pages the TA is
+  stopped (``0x0320``, ``0x0CF0``) until a grow update (``0x0328`` +
+  ``0x0CF8``) or a partial render (``FRAG_PR``). While a partial render is
+  armed, the scheduler passes the fragment context's ``FENCE_PR`` when it
+  only waits for the geometry itself and kicks the ``FRAG_PR`` behind it
+  without moving the queue (:exp:`E043`); ``FRAG_PR`` stays queued between
+  partial renders (``dm_state.keep``).
+* **PM-MMU invalidation** (:exp:`E043`): SLC ``0x10``, ``BIF_CTRL_INVAL = 4``
+  and ``0x1348`` at every PM load and every 3D finished; a first geometry
+  kick also runs ``0x0258`` and the PM reset pulses ``0x0290``/``0x0198``.
+* **Known gap**: the restart after a second partial render faults (Q30).

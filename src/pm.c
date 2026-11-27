@@ -15,14 +15,16 @@
 #include "pm.h"
 
 /* ------------------------------------------------------------ registers */
-#define CR_PM_ALIST_SP_LOAD      0x0278   /* load value; live ctx0 0x0270, ctx1 0x0280 */
-#define CR_PM_MLIST_SP_LOAD      0x02C8   /* load value; live ctx0 0x02C0, ctx1 0x02D0 */
+/* stack-pointer load values per PM context (kick-geometry-ta.md B step 5) */
+static const uint16_t alist_sp_load[2] = { 0x0268, 0x0278 };   /* live 0x0270 / 0x0280 */
+static const uint16_t mlist_sp_load[2] = { 0x02B8, 0x02C8 };   /* live 0x02C0 / 0x02D0 */
 #define CR_PM_ALIST_SP_CMD       0x0288   /* E037: load commands, write 1, wait bit 0 = 0 */
 #define CR_PM_MLIST_SP_CMD       0x0190
 #define CR_PM_CTX_SEL_A          0x03D0   /* ctx0: bit 8, ctx1: bit 16 (Q16h) */
 #define CR_PM_CTX_SEL_B          0x03D4   /* ctx0: bit 0, ctx1: bit 8 */
 #define CR_PM_PAGE_MANAGEOP      0x02A0   /* 1 = pause TA allocation */
 #define CR_PM_PAGE_MANAGEOP_ACK  0x02A8
+#define CR_PM_TLB_INVAL          0x1348   /* PM TLB invalidate, self-clearing */
 #define FREELIST_BASE_ALIGN      16u      /* ROGUE_BIF_PM_FREELIST_BASE_ADDR_ALIGNSIZE */
 
 struct fl_regs {
@@ -98,17 +100,40 @@ void pm_store_freelist(uint32_t ctx, uint32_t which, struct pm_freelist *fl)
 	      fl->current_stack_top, fl->allocated_page_count, fl->allocated_mmu_page_count);
 }
 
-void pm_load_lists(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist,
-		   uint64_t alist_sp, uint32_t mlist_sp)
+void pm_load_bases(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist)
 {
 	cr_write64(mlist_base[ctx], mlist);
 	cr_write64(cat_base[ctx][0], vce);
 	cr_write64(cat_base[ctx][1], te);
 	cr_write64(cat_base[ctx][2], alist);
-	cr_write64(CR_PM_ALIST_SP_LOAD, alist_sp);
-	cr_write32(CR_PM_MLIST_SP_LOAD, mlist_sp);
-	pm_cmd(CR_PM_ALIST_SP_CMD);
+}
+
+/* Bases plus the stack-pointer load pulses: not on a first geometry kick. */
+void pm_load_lists(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist,
+		   uint64_t alist_sp, uint32_t mlist_sp)
+{
+	pm_load_bases(ctx, mlist, vce, te, alist);
+	cr_write64(alist_sp_load[ctx], alist_sp);
+	cr_write32(mlist_sp_load[ctx], mlist_sp);
 	pm_cmd(CR_PM_MLIST_SP_CMD);
+	pm_cmd(CR_PM_ALIST_SP_CMD);
+}
+
+/*
+ * PM-MMU / PM-TLB invalidation: every first geometry kick, every HWRTData
+ * switch in a PM context and every 3D finished (kick-geometry-ta.md B step 3).
+ * Without it the PM keeps catalogue/TLB entries of the previous HWRTData and
+ * the second HWRTData of a dataset stalls or faults (E041, E042).
+ */
+void pm_mmu_inval(void)
+{
+	bcast_write32(CR_SLC_CTRL_FLUSH_INVAL, 0x10);
+	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
+	bcast_write32(CR_BIF_CTRL_INVAL, 4);
+	cr_poll32(CR_BIF_CTRL_INVAL, 4, 0, 10000);
+	bcast_write32(CR_PM_TLB_INVAL, 1);
+	if (!cr_poll32(CR_PM_TLB_INVAL, 1, 0, 10000))
+		TRACE(SFID_DBG_2, 0xE0431348u);
 }
 
 /*
@@ -270,23 +295,45 @@ void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
 }
 
 /*
- * Let the TA continue after pages were added (E041 experiments).
- * EXP_RESUME = 1: clear PM_OUT_OF_MEMORY again after the update.
+ * TA control around an out-of-memory event (partial-render-spm.md, "Resuming
+ * geometry after OOM", answer to Q28). None has a public name.
  */
-#ifndef EXP_RESUME
-#define EXP_RESUME 1
-#endif
+#define CR_PM_RESUME        0x0328   /* resumes the PM / TA after a free-list update */
+#define CR_TA_STOP_ON_OOM   0x0320
+#define CR_TA_PAUSE         0x0CF0   /* pause TE/TA state, self-clearing */
+#define CR_TA_UNPAUSE       0x0CF8
+#define CR_PM_PR_RESTART_A  0x0290
+#define CR_PM_PR_RESTART_B  0x0198
+#define CR_PM_PR_RESTART_C  0x01B8   /* self-clearing */
+#define CR_TA_RESTART       0x0CA8
+
+/* ready pages: after the paused free-list update */
 static void spm_resume_ta(void)
 {
-	TRACE(SFID_DBG_6, 0xE0410A01u, cr_read32(CR_EVENT_STATUS), cr_read32(0x20C8),
-	      cr_read32(0x0348), cr_read32(0x0D00));
-#if EXP_RESUME == 1
-	cr_write32(CR_EVENT_CLEAR, EV_PM_OUT_OF_MEMORY);
-#elif EXP_RESUME == 2
-	cr_write32(CR_EVENT_CLEAR, EV_PM_OUT_OF_MEMORY);
-	cr_write32(0x0400, 1);          /* TA run register again */
-#endif
-	TRACE(SFID_DBG_4, 0xE0410A02u, cr_read32(0x20C8), cr_read32(0x0D00));
+	cr_write32(CR_PM_RESUME, 1);
+}
+
+/* no ready pages: stop the TA until a grow update or a partial render */
+static void spm_pause_ta(void)
+{
+	cr_write32(CR_TA_STOP_ON_OOM, 1);
+	if (!cr_poll32(CR_EVENT_STATUS, EV_TA_TERMINATE, EV_TA_TERMINATE, 10000))
+		TRACE(SFID_DBG_2, 0xE0420A40u);
+	cr_write32(CR_EVENT_CLEAR, EV_TA_TERMINATE);
+	cr_write32(CR_TA_PAUSE, 1);
+	if (!cr_poll32(CR_TA_PAUSE, 1, 0, 10000))
+		TRACE(SFID_DBG_2, 0xE0420CF0u);
+}
+
+/* after a grow update the paused geometry waited for */
+static void spm_unpause_ta(void)
+{
+	const void *hwrt = fwptr(spm.hwrt);
+
+	if (hwrt)
+		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
+	cr_write32(CR_PM_RESUME, 1);
+	cr_write32(CR_TA_UNPAUSE, 1);
 }
 
 static void request_grow(struct pm_freelist *fl)
@@ -317,55 +364,62 @@ static void start_partial_render(void)
 	}
 	TRACE(SFID_SPM_66, spm.pr_fence.addr, *p, spm.pr_fence.value);
 	TRACE(SFID_SPM_33);
-	/* let the fragment context's FENCE_PR pass: FRAG_PR then runs as a PR */
-	sched_ufo_signal(&spm.pr_fence);
+	/*
+	 * The scheduler now runs the fragment context's FRAG_PR as a partial
+	 * render, looking past its FENCE_PR without consuming it (sched.c).
+	 */
 	spm_set(SPM_WAIT_HW);
 }
 
+/*
+ * SPM failing-UFO check (partial-render-spm.md fidelity notes): while a
+ * partial render is armed, a FENCE_PR UFO that only waits for this geometry
+ * (its queue timeline, the address of partial_render_geom_frag_fence) does
+ * not block the partial render.
+ */
+bool spm_pr_fence_ok(const struct ufo *u)
+{
+	return spm.st == SPM_WAIT_HW && spm.pr_fence.addr && u->addr == spm.pr_fence.addr;
+}
+
+/*
+ * PM_OUT_OF_MEMORY while the geometry runs. The firmware does not ask the
+ * hardware which list ran out: it always extends the HWRTData's global free
+ * list (freelists[1]; [2] for a secondary geometry pipe, flags bit 8).
+ */
 void spm_oom(void)
 {
 	const void *hwrt = fwptr(spm.hwrt);
-	struct pm_freelist *fls[2];
+	uint32_t which;
+	fwaddr_t addr;
+	struct pm_freelist *fl;
+	uint32_t *pend, n, old;
 
-	TRACE(SFID_DBG_4, 0xE0410A00u, spm.st, cr_read32(CR_EVENT_STATUS));
 	if (!hwrt || spm.st != SPM_NONE)
 		return;
-	fls[0] = hwrt_freelist(hwrt, PM_FL_GLOBAL);
-	fls[1] = hwrt_freelist(hwrt, PM_FL_LOCAL);
-	TRACE(SFID_SPM_7, spm.cmd, hw_rd32(hwrt, HWRT_FREELISTS + 4), hw_rd32(hwrt, HWRT_FREELISTS));
-	hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_GEOM_OUTOFMEM);
-
-	/* 0. pages of a grow update that arrived while the geometry ran */
-	for (uint32_t i = 0; i < 2; i++) {
-		fwaddr_t addr = hw_rd32(hwrt, HWRT_FREELISTS + 4 * (1 - i));
-		uint32_t *pend = grown_slot(addr, false);
-		struct pm_freelist *fl = fls[i];
-		uint32_t old;
-
-		if (!fl || !pend || !*pend)
-			continue;
-		old = fl->current_pages;
-		fl->current_pages += *pend;
-		fl_add_pages(addr, fl, *pend, old);
-		*pend = 0;
-		TRACE(SFID_SPM_44, (uint32_t)(fl->current_dev_addr >> 32),
-		      (uint32_t)fl->current_dev_addr, fl->current_pages, fl->current_stack_top);
-		spm_resume_ta();
-		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
+	which = (hw_rd32(hwrt, HWRT_FLAGS) & 0x100) ? 2 : PM_FL_GLOBAL;
+	addr = hw_rd32(hwrt, HWRT_FREELISTS + 4 * which);
+	fl = fwptr(addr);
+	TRACE(SFID_SPM_7, spm.cmd, hw_rd32(hwrt, HWRT_FREELISTS), addr);
+	if (!fl) {
+		start_partial_render();
 		return;
 	}
-	/* 1. ready pages: no host round trip; then ask for more in the background */
-	for (uint32_t i = 0; i < 2; i++) {
-		struct pm_freelist *fl = fls[i];
-		fwaddr_t addr = hw_rd32(hwrt, HWRT_FREELISTS + 4 * (1 - i));
-		uint32_t n, old;
+	hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_GEOM_OUTOFMEM);
 
-		if (!fl || !fl->ready_pages)
-			continue;
-		n = fl->ready_pages;
+	/*
+	 * 1. pages of a grow update that arrived while the geometry ran, then the
+	 * ready pages; no host round trip. More is requested in the background.
+	 */
+	pend = grown_slot(addr, false);
+	n = (pend && *pend) ? *pend : fl->ready_pages;
+	if (n) {
+		if (pend && *pend)
+			*pend = 0;
+		else
+			fl->ready_pages = 0;
 		old = fl->current_pages;
 		fl->current_pages += n;
-		fl->ready_pages = 0;
 		fl_add_pages(addr, fl, n, old);
 		TRACE(SFID_SPM_44, (uint32_t)(fl->current_dev_addr >> 32),
 		      (uint32_t)fl->current_dev_addr, fl->current_pages, fl->current_stack_top);
@@ -375,19 +429,15 @@ void spm_oom(void)
 		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
 		return;
 	}
-	/* 2. grow: the geometry waits for the host's GROW_UPDATE */
-	for (uint32_t i = 0; i < 2; i++) {
-		struct pm_freelist *fl = fls[i];
-
-		if (!fl || !can_grow(fl))
-			continue;
+	/* 2. nothing ready: stop the TA, then grow or partial render */
+	spm_pause_ta();
+	if (can_grow(fl)) {
 		request_grow(fl);
-		spm.wait_fl = hw_rd32(hwrt, HWRT_FREELISTS + 4 * (1 - i));
-		TRACE(SFID_SPM_41, spm.wait_fl);
+		spm.wait_fl = addr;
+		TRACE(SFID_SPM_41, addr);
 		spm_set(SPM_WAIT_GROW);
 		return;
 	}
-	/* 3. partial render */
 	start_partial_render();
 }
 
@@ -419,20 +469,19 @@ void spm_grow_update(fwaddr_t addr, uint32_t delta, uint32_t new_pages, uint32_t
 		return;
 	}
 	fl->current_pages = cur > old ? cur : old;
-	if (added)
+	if (!added && fl->ready_pages) {
+		/* everything the host added is ready pages: hand them over now */
+		added = fl->ready_pages;
+		fl->ready_pages = 0;
+		fl->current_pages = old + added;
+	}
+	if (added) {
 		fl_add_pages(addr, fl, added, old);
-	{
-		if (added) {
-			const void *hwrt = fwptr(spm.hwrt);
-
-			if (hwrt)
-				hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
-			spm_resume_ta();
-			spm_set(SPM_NONE);
-		} else {
-			spm.st = SPM_NONE;
-			start_partial_render();         /* the host could not grow */
-		}
+		spm_unpause_ta();
+		spm_set(SPM_NONE);
+	} else {
+		spm.st = SPM_NONE;
+		start_partial_render();         /* the host could not grow */
 	}
 }
 
@@ -447,23 +496,32 @@ void spm_pr_started(void)
 }
 
 /*
- * End of a partial render: PM_PARTIAL_RENDER_ENABLE back to 0, a context-0
- * load of zero list stack pointers and catalogues (the PM restarts them,
- * INIT_PAGE in VCE0), and the context-1 slot invalidated (fidelity note).
- * The geometry continues without a new kick.
+ * End of a partial render: restart the paused geometry
+ * (partial-render-spm.md, "Restarting geometry after a partial render").
  */
 void spm_pr_done(void)
 {
 	const void *hwrt = fwptr(spm.hwrt);
 
 	cr_write32(CR_PM_PARTIAL_RENDER_ENABLE, 0);
-	if (hwrt) {
-		pm_select(PM_CTX_GEOM);
-		pm_load_lists(PM_CTX_GEOM, hw_rd64(hwrt, HWRT_PM_MLIST_DEV_ADDR), 0, 0, 0, 0, 0);
-		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
-	}
+	/* the 3D PM context's state is the partial render's: drop the slot */
 	pm_slots[PM_CTX_FRAG].valid = false;
 	pm_slots[PM_CTX_FRAG].dirty = false;
+	if (hwrt)
+		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_GEOM);
+	pm_select(PM_CTX_GEOM);
+	cr_write32(CR_PM_PR_RESTART_A, 1);
+	cr_write32(CR_PM_PR_RESTART_B, 1);
+#ifdef EXP_PR_FULL_INVAL
+	pm_mmu_inval();         /* SLC + BIF + PM TLB: hung the board in E043 */
+#else
+	cr_write32(CR_PM_TLB_INVAL, 1);
+#endif
+	cr_write32(CR_PM_PR_RESTART_C, 1);
+	if (!cr_poll32(CR_PM_PR_RESTART_C, 1, 0, 10000))
+		TRACE(SFID_DBG_2, 0xE04201B8u);
+	cr_write32(CR_PM_RESUME, 1);
+	cr_write32(CR_TA_RESTART, 1);
 	TRACE(SFID_SPM_38);
 	spm_set(SPM_NONE);
 }
@@ -476,6 +534,20 @@ void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n)
 	struct fwccb_cmd c;
 	uint32_t ids[MAX_FL_RECONSTRUCT], cnt = 0;
 
+	/* every free list loaded in a PM slot (hardware-recovery.md step 4) */
+	for (uint32_t ctx = 0; ctx < 2; ctx++)
+		for (uint32_t w = 0; pm_slots[ctx].valid && w < 2; w++) {
+			struct pm_freelist *fl = fwptr(pm_slots[ctx].fl[w]);
+			bool dup = false;
+
+			if (!fl)
+				continue;
+			for (uint32_t k = 0; k < cnt; k++)
+				dup |= ids[k] == fl->freelist_id;
+			if (!dup && cnt < MAX_FL_RECONSTRUCT)
+				ids[cnt++] = fl->freelist_id;
+			fl->grow_pending = 0;
+		}
 	spm_reset();
 	pm_invalidate();
 	for (uint32_t i = 0; i < n; i++) {

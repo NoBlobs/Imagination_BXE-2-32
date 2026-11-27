@@ -23,4 +23,5 @@ current bring-up status and experiment log.
    boot-and-runtime
    scheduler-and-kicks
    power-hwr-and-stats
+   test-harness
    status-and-experiments

@@ -16,6 +16,7 @@
  */
 #include "fw.h"
 #include "kick.h"
+#include "pm.h"
 
 #define MAX_CTX         64
 #define CLEANUP_Q       8
@@ -65,13 +66,32 @@ static struct ctx_ent *ctx_find(fwaddr_t addr, bool create)
 
 static bool any_busy(void)
 {
+	static uint32_t last_why = ~0u;
+	uint32_t why = 0;
+	fwaddr_t who = 0;
+
 	for (uint32_t d = 0; d < DM_MAX; d++)
-		if (dms[d].busy)
-			return true;
-	for (uint32_t i = 0; i < MAX_CTX; i++)
-		if (ctxs[i].used && ctxs[i].pending && !ctxs[i].dead)
-			return true;
-	return false;
+		if (dms[d].busy) {
+			why = 0x100u | d;
+			who = dms[d].ctx;
+			break;
+		}
+	for (uint32_t i = 0; !why && i < MAX_CTX; i++)
+		if (ctxs[i].used && ctxs[i].pending && !ctxs[i].dead) {
+			why = 0x200u | i;
+			who = ctxs[i].addr;
+		}
+	/* debug (E043): what keeps the GPU from reporting idle */
+	if (why != last_why) {
+		const struct cccb_ctl *ctl = NULL;
+
+		if (who && (why & 0x200u))
+			ctl = fwptr(ctx_ptr(&ctxs[why & 0xFF])->ccbctl_fw_addr);
+		TRACE(SFID_DBG_6, 0xE0440000u | why, who, ctl ? ctl->read_offset : 0u,
+		      ctl ? ctl->write_offset : 0u, ctl ? ctl->dep_offset : 0u);
+		last_why = why;
+	}
+	return why != 0;
 }
 
 static void update_pow_state(void)
@@ -135,6 +155,26 @@ void sched_ufo_signal(const struct ufo *u)
 {
 	ufo_update(u, false);
 	host_notify_needed = true;
+}
+
+/* Did a FENCE_PR pass only through the SPM failing-UFO check? */
+static bool pr_fence_blocked(const struct ufo *u, uint32_t cnt)
+{
+	for (uint32_t i = 0; i < cnt; i++)
+		if (!ufo_satisfied(&u[i], true))
+			return true;
+	return false;
+}
+
+/* Kick the FRAG_PR at offset off as a partial render; the queue does not move. */
+static bool run_partial_render(struct ctx_ent *e, struct fwcommoncontext *ctx, uint8_t *ccb,
+			       uint32_t off)
+{
+	struct ccb_cmd_header *h = (struct ccb_cmd_header *)(ccb + off);
+
+	if ((h->cmd_type & 0x7FFF) != CCB_CMD_FRAG_PR || dms[DM_FRAG].busy)
+		return false;
+	return kick_task(DM_FRAG, e->addr, ctx, h, h + 1, off);
 }
 
 /* --------------------------------------------------------- cCCB walk */
@@ -227,6 +267,8 @@ static bool ctx_process(struct ctx_ent *e)
 				ctl->dep_offset = roff;
 				if (kick_task(dm, e->addr, ctx, hdr, payload, roff))
 					return true;   /* running: stays at read_offset */
+				if (kick_defer)
+					return progress;        /* stays queued */
 				/* completed at once (or not supported): retire */
 				cleanup_ctl_done(e);
 			} else {
@@ -244,11 +286,24 @@ static bool ctx_process(struct ctx_ent *e)
 			const struct ufo *u = payload;
 			uint32_t cnt = hdr->cmd_size / sizeof(struct ufo);
 
+			bool pr_ok = id == CCB_CMD_FENCE_PR;
+
 			for (uint32_t i = 0; i < cnt; i++) {
-				if (!ufo_satisfied(&u[i], id == CCB_CMD_FENCE_PR)) {
-					ctx->last_failed_ufo = u[i];
-					return progress;
-				}
+				if (ufo_satisfied(&u[i], id == CCB_CMD_FENCE_PR))
+					continue;
+				if (pr_ok && spm_pr_fence_ok(&u[i]))
+					continue;       /* waits only for the geometry */
+				ctx->last_failed_ufo = u[i];
+				return progress;
+			}
+			if (pr_ok && pr_fence_blocked(u, cnt)) {
+				/*
+				 * Satisfied only for an armed partial render: run the
+				 * FRAG_PR that follows without consuming this fence.
+				 */
+				if (next != woff && run_partial_render(e, ctx, ccb, next))
+					return true;
+				return progress;
 			}
 			break;
 		}
@@ -319,7 +374,11 @@ void sched_dm_done(uint32_t dm)
 		return;
 	s->busy = false;
 	e = ctx_find(s->ctx, false);
-	if (e) {
+	if (e && s->keep) {
+		/* a partial render: FRAG_PR stays at the head for the next one */
+		s->keep = false;
+		e->pending = true;
+	} else if (e) {
 		struct fwcommoncontext *ctx = ctx_ptr(e);
 		struct cccb_ctl *ctl = fwptr(ctx->ccbctl_fw_addr);
 		struct ccb_cmd_header *hdr = (struct ccb_cmd_header *)

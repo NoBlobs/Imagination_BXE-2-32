@@ -14,11 +14,15 @@ struct dm_state {
 	uint64_t kick_time;     /* ROGUE_CR_TIMER at kick */
 	fwaddr_t hwrt;          /* render target in use (geometry/fragment) */
 	uint32_t bif_slot;
+	uint32_t flags;         /* geometry command flags (first/last kick) */
+	bool keep;              /* done, but the command stays queued (FRAG_PR) */
 };
 
 extern struct dm_state dms[DM_MAX];
 
 void kick_init(void);
+/* Set by kick_task when the command must stay queued (not run, not retired). */
+extern bool kick_defer;
 /* Start a task; true if the DM is now running it, false if it completed at once. */
 bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off);
