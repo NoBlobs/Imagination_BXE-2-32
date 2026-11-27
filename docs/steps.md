@@ -15,26 +15,21 @@ dependency order. Each step gives:
 Written against `docsClean` `2d4b018` ("General improvements"). Clean-room rules are
 unchanged: sources are `docsClean/` and our own experiments only.
 
-## Next, by priority (E044, `docsClean` `50055ae`)
+## Next, by priority (E047, 2026-11-27)
 
-`docsClean/vkfwtest-results.md` gives the manufacturer open firmware's results on the same
-mainline + Mesa `pvr` stack: 18 pass / 18 fail / 3 skip. Ours: 16 / 20 / 3. The two agree on
-36 of 39 tests (E044, "Comparison with the manufacturer firmware"). The work is ordered by
-that comparison:
+E047 found that almost every failure of the vkfwtest battery was a Mesa `pvr` bug: Mesa ignores
+render-pass dependencies to `VK_SUBPASS_EXTERNAL`, so the read-back copy raced the render.
+With vkfwtest's read-back barrier, our firmware passes the battery: **42 pass / 6 fail / 2
+skip**. The 6 failures are the `second-*` tests that keep showing that Mesa bug on purpose. The
+manufacturer firmware failed the same 19 tests for the same reason.
 
 1. **`queries`: done (E045).** `CR[0x0FC0]` from Q32 (`dd37220`), plus a vkfwtest fix:
    no timestamps without `timestampValidBits`. The test passes with exact counts.
-2. **`indirect` frame 1 and `vertex-ext` `divisor 4`**: renders after the first on a device
-   that pass with the reference and fail with ours.
-   - Clock checked (E046): 819.2 MHz gives the same results as 307.2 MHz, so the clock is not
-     the cause; 1 GHz corrupts data now and then. Do: compare the second render of these two tests with the
-     `multiframe` frame 1 (which fails on both) to find what our firmware does differently.
-   - Done when: both pass. Then the 18-test baseline of `docsClean` section 4 holds.
-3. **Keep the other 18 failures clean**: they fail the same way with the reference
-   (`multiframe` frame 1, `pre-ta`/`bigpb`/`texture` frame 0, `raster` 1152/4096, …), so
-   they are not firmware work. They must complete with no timeout, device lost or kernel
-   fault, which already holds. Lower priority than before: the second-HWRTData, post-OOM and
-   after-transfer leads of E044.
+2. **`indirect`, `vertex-ext` and the "frame 1" family: done.** They were the Mesa bug (E047),
+   not firmware. All pass now. The clock does not matter either (E046).
+3. **Compare firmwares again:** ask the dirty team to run the current vkfwtest on the
+   manufacturer firmware. Its baseline was taken without the read-back barrier, so it hides
+   the differences that are left.
 4. **Stage E without `VK_ERROR_DEVICE_LOST`**: the reference and the vendor stack do not
    return it either, so phase 5 needs only a clean recovery (which holds) until Mesa changes.
 5. **Render-target arrays (E045): done on the firmware side for normal renders.** Same result as

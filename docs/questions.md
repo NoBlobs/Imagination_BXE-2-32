@@ -28,6 +28,36 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
+#### Q37 — Render-target array with load op LOAD: the background load reads layer 0
+
+[E047](logRefs/E047-vkfwtest-investigation-tests.md). Most vkfwtest failures, including the
+step-3 failure of Q36 and the `msaa` failure of Q34, were a Mesa synchronisation bug. Mesa
+ignores render-pass dependencies to `VK_SUBPASS_EXTERNAL`, so the read-back copy raced the
+render. vkfwtest now puts an explicit barrier before every read-back.
+- **With that barrier, `msaa` with RTA on passes.** Q34 was the race, not the PBE resolve.
+- **`rta` step 3 changes.** The setup:
+  - Mesa `5d2dc45` with RTA on;
+  - a render pass with load op `LOAD` over a 6-layer 2D array view;
+  - `vkCmdClearAttachments` on layer 1 (whole area) and on an inner rect of layer 5.
+- **What happens:**
+  - the bitmap marks layers 0, 1 and 5, and our firmware renders `{0, 1, 5}`, writing
+    `BCAST[0x03D8]` = 0, 1, 5;
+  - the clears land in the right layers (layer 1 passes, layer 5's inner rect is right);
+  - **outside the rect, layer 5 holds layer 0's contents**: the background load read layer 0.
+- **Mesa's load-op program** (`pvr_usc.c`, `rta_load_clear`, set for a single view with
+  `layer_count > 1`) adds `layer_id × layer_size` to the texture address. `layer_id` is
+  `RENDER_TGT_ID`. The end-of-tile program sees the right `RENDER_TGT_ID`; the background
+  program behaves as if it saw 0.
+1. With the manufacturer firmware v1.1, the RTA-enabled Mesa and **the current vkfwtest** (with
+   the read-back barrier), does `vkfwtest rta` step 3 pass? The Q36 run was made before the
+   barrier, so the race hid this case.
+2. Does the background object (`pds_bgnd`) get `RENDER_TGT_ID` from `BCAST[0x03D8]`, or from
+   another register or state that must be set per layer? If another, which one, and when is it
+   written (before each layer's `0x0F00` kick)?
+3. With the current vkfwtest, which of the other tests fail on the manufacturer firmware? We
+   pass 42 of 50, and the 6 failures left are the Mesa-bug detectors (`second-*`). Running
+   `vkfwtest -k -B <baseline> all` from the current vkfwtest gives both answers.
+
 #### Q36 — Render-target array with load op LOAD: the clears of the touched layers are lost (answered in `88e48e7`: the manufacturer firmware fails the same way, Mesa side; bit 0 comes from the hardware/VDM stream)
 
 [E045](logRefs/E045-rta-fw-1.1.md), `vkfwtest rta` step 3 (vkfwtest after this change):
@@ -51,7 +81,7 @@ Mesa, step 3 passes too.
    (`pds_bgnd`, `isp_bgobjvals`, `0x0F10`) that the spec does not list?
 3. Why is layer 0 marked in the RTC bitmap when only layers 1 and 5 get geometry?
 
-#### Q34 — MSAA resolve in the PBE (`downscale`) writes nothing (`msaa` with `gs_rta_support`; answered in `b50fabe`: firmware passes the PBE words through, the reference fails the same way, Mesa side)
+#### Q34 — MSAA resolve in the PBE (`downscale`) writes nothing (`msaa` with `gs_rta_support`; answered in `b50fabe`; E047: it was the Mesa read-back race, `msaa` with RTA on now passes)
 
 [E045](logRefs/E045-rta-fw-1.1.md). When Mesa sees firmware 1.1 it turns `gs_rta_support` on, and
 with it it resolves MSAA attachments in the PBE at the end of the render
