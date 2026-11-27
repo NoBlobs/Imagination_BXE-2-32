@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Thalles Campagnani */
-/*
- * Reset / NMI entry (0xBFC00000, KSEG1, microMIPS).
+/**
+ * Reset / NMI entry (``0xBFC00000``, KSEG1, microMIPS).
  *
  * Brings the MIPS core to a state where C code can run from the mapped
  * firmware heap:
- *   - CP0 setup (exception base, vectored interrupts, uncached KSEG0);
- *   - TLB cleared, then wired entries for the register bank, the host page
- *     table and the stack, with the matching wrapper remap entries;
- *   - .bss cleared, stack pointer set, jump to fw_main() through ERET.
+ *
+ * - CP0 setup (exception base, vectored interrupts, uncached KSEG0);
+ * - TLB cleared, then wired entries for the register bank, the host page
+ *   table and the stack, with the matching wrapper remap entries;
+ * - ``.bss`` cleared, stack pointer set, jump to ``fw_main()`` through
+ *   ``ERET``.
  *
  * This is also the warm-boot path: every boot re-initialises everything.
  */
@@ -20,8 +22,20 @@
 	.set	noreorder
 	.set	noat
 
-/* Program wrapper remap entry: \entry (reg), base_in VA \va (reg), out word \hi (reg).
- * Order (docsClean/memory-model.md): low word, high word, read back the high word. */
+/**
+ * Program a MIPS wrapper address-remap entry.
+ *
+ * The order follows ``docsClean`` ``memory-model.md``: low word (entry,
+ * input address, enable), high word (output address), then a read-back of
+ * the high word that flushes the posted writes.
+ *
+ * Args:
+ *     entry: Register holding the remap entry index.
+ *     va: Register holding the input virtual address.
+ *     hi: Register holding the high (output) word.
+ *     tmp: Scratch register.
+ *     regs: Register holding the register-bank address.
+ */
 	.macro	REMAP entry, va, hi, tmp, regs
 	sll	\tmp, \entry, REMAP_ENTRY_SHIFT
 	or	\tmp, \tmp, \va
@@ -31,7 +45,15 @@
 	lw	\tmp, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)(\regs)	/* flush posted writes */
 	.endm
 
-/* hi word of a remap entry from a 64-bit physical address held in (\lo32, \hi32) */
+/**
+ * Build a remap entry's high word from a 64-bit physical address.
+ *
+ * Args:
+ *     out: Destination register.
+ *     lo32: Register holding the address's low 32 bits.
+ *     hi32: Register holding the address's high 32 bits.
+ *     tmp: Scratch register.
+ */
 	.macro	PHYS_TO_HI out, lo32, hi32, tmp
 	srl	\out, \lo32, 12
 	sll	\tmp, \hi32, 20
@@ -39,7 +61,14 @@
 	sll	\out, \out, 4
 	.endm
 
-/* hi word of a remap entry from a host MIPS PTE */
+/**
+ * Build a remap entry's high word from a host MIPS page-table entry.
+ *
+ * Args:
+ *     out: Destination register.
+ *     pte: Register holding the PTE.
+ *     tmp: Scratch register.
+ */
 	.macro	PTE_TO_HI out, pte, tmp
 	srl	\out, \pte, 6
 	li	\tmp, 0x00FFFFFF
@@ -47,13 +76,37 @@
 	sll	\out, \out, 4
 	.endm
 
-/* progress marker in the boot-data page (KSEG1, works before the TLB is set up) */
+/**
+ * Write a progress marker to the boot-stage word of the boot-data page.
+ *
+ * The page is reached through KSEG1, so this works before the TLB is set up.
+ * Expects ``$25`` to hold the boot-data address; clobbers ``$26``.
+ *
+ * Args:
+ *     v: The marker (``0xA0nn`` during CP0 setup, ``0xB007n`` afterwards).
+ */
 	.macro	MARK v
 	li	$26, \v
 	sw	$26, BD_BOOT_STAGE($25)
 	.endm
 
 	.section .boot, "ax"
+/**
+ * Reset entry point, at ``0xBFC00000``.
+ *
+ * - Sets ``Status`` (CU0, BEV, ERL; interrupts off), makes KSEG0 uncached
+ *   (the firmware never uses the caches), makes exception handlers
+ *   microMIPS, selects dedicated interrupt vectors 256 bytes apart and sets
+ *   ``EBase`` to the exception page.
+ * - Invalidates every TLB entry, then wires the register bank and the XPU
+ *   broadcast bank (1 MiB identity pages), the four host page-table pages
+ *   (TLB slots 0 and 1, remap entries 0, 16, 1, 17) and the two stack pages,
+ *   with their wrapper remap entries.
+ * - Sets ``Wired``, the next dynamic TLB slot and the stack pointer, then
+ *   leaves reset mode with ``ERET`` to :c:func:`fw_entry`.
+ *
+ * Progress is written to the boot-stage word and ``CR_DBG_STAGE``.
+ */
 	.globl	_reset
 	.ent	_reset
 _reset:

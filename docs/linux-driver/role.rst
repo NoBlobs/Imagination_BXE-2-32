@@ -6,7 +6,7 @@ Role of the Linux driver
 =========================
 
 Mainline Linux's ``drm/imagination`` driver (``drivers/gpu/drm/imagination/``,
-module ``powervr.ko``) drives the PowerVR Rogue GPU from the host RISC-V CPUs
+module ``powervr.ko``) drives the Imagination Rogue GPU from the host RISC-V CPUs
 and treats the MIPS firmware as an autonomous coprocessor that owns the
 internal GPU scheduling, cache flushes, power handshakes and hardware
 recovery.

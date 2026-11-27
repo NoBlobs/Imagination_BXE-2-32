@@ -1,9 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/* Small runtime helpers: memory, time, barrier, host notification, trace. */
+/**
+ * Small runtime helpers: memory, time, register polling, the host write
+ * barrier and interrupt, and the trace buffer.
+ *
+ * The firmware links without libc or libgcc, so this file also provides
+ * ``memset``, ``memcpy`` and the 64-bit division helpers the compiler calls.
+ */
+/**/
 #include "fw.h"
 #include "mips.h"
 
+/**
+ * Fill memory with a byte.
+ *
+ * Args:
+ *     d: Destination.
+ *     c: Byte value (only the low 8 bits are used).
+ *     n: Number of bytes.
+ *
+ * Returns:
+ *     ``d``.
+ */
 void *memset(void *d, int c, size_t n)
 {
 	uint8_t *p = d;
@@ -13,6 +31,21 @@ void *memset(void *d, int c, size_t n)
 	return d;
 }
 
+/**
+ * Copy memory.
+ *
+ * Copies 32-bit words when both pointers and the length are 4-byte aligned
+ * (uncached GPU memory and registers must not be read byte by byte when a
+ * word access is possible), bytes otherwise. The areas must not overlap.
+ *
+ * Args:
+ *     d: Destination.
+ *     s: Source.
+ *     n: Number of bytes.
+ *
+ * Returns:
+ *     ``d``.
+ */
 void *memcpy(void *d, const void *s, size_t n)
 {
 	uint8_t *dp = d;
@@ -35,6 +68,17 @@ void *memcpy(void *d, const void *s, size_t n)
 uint64_t __udivdi3(uint64_t n, uint64_t d);
 uint64_t __umoddi3(uint64_t n, uint64_t d);
 
+/**
+ * Unsigned 64-bit division by shift and subtract.
+ *
+ * Args:
+ *     n: Dividend.
+ *     d: Divisor. Division by zero returns all ones and a zero remainder.
+ *     rem: Where to store the remainder, or ``NULL``.
+ *
+ * Returns:
+ *     The quotient.
+ */
 static uint64_t udivmod64(uint64_t n, uint64_t d, uint64_t *rem)
 {
 	uint64_t q = 0, r = 0;
@@ -56,9 +100,38 @@ static uint64_t udivmod64(uint64_t n, uint64_t d, uint64_t *rem)
 	return q;
 }
 
+/**
+ * Compiler helper for unsigned 64-bit division (``n / d``).
+ *
+ * Args:
+ *     n: Dividend.
+ *     d: Divisor.
+ *
+ * Returns:
+ *     The quotient.
+ */
 uint64_t __udivdi3(uint64_t n, uint64_t d) { return udivmod64(n, d, NULL); }
+/**
+ * Compiler helper for unsigned 64-bit remainder (``n % d``).
+ *
+ * Args:
+ *     n: Dividend.
+ *     d: Divisor.
+ *
+ * Returns:
+ *     The remainder.
+ */
 uint64_t __umoddi3(uint64_t n, uint64_t d) { uint64_t r; udivmod64(n, d, &r); return r; }
 
+/**
+ * Read the GPU timer.
+ *
+ * ``CR_TIMER`` is read as high, low, high again until both high halves
+ * agree, so that a carry between the two 32-bit reads is never seen.
+ *
+ * Returns:
+ *     The 48-bit timer value (it counts at the core clock / 256).
+ */
 uint64_t gpu_timer(void)
 {
 	uint32_t hi, lo, hi2;
@@ -71,6 +144,15 @@ uint64_t gpu_timer(void)
 	return (((uint64_t)hi << 32) | lo) & 0xFFFFFFFFFFFFull;
 }
 
+/**
+ * Busy-wait.
+ *
+ * Counts CP0 ``Count`` ticks (core clock / 2), so the delay follows the
+ * current clock in :c:var:`g`.
+ *
+ * Args:
+ *     us: Delay in microseconds.
+ */
 void udelay(uint32_t us)
 {
 	uint32_t per_us = g.count_per_ms / 1000;
@@ -82,6 +164,22 @@ void udelay(uint32_t us)
 		;
 }
 
+/**
+ * Poll a GPU register until a masked value appears.
+ *
+ * On timeout the register, mask and a counter are recorded in ``sysdata``
+ * (``cr_poll_*``, read by the host's debug dump) and a ``HWR_13`` trace entry
+ * is written.
+ *
+ * Args:
+ *     off: Register offset.
+ *     mask: Bits to compare.
+ *     value: Expected value of ``reg & mask``.
+ *     timeout_us: Timeout in microseconds.
+ *
+ * Returns:
+ *     ``true`` when ``(reg & mask) == value`` was seen, ``false`` on timeout.
+ */
 bool cr_poll32(uint32_t off, uint32_t mask, uint32_t value, uint32_t timeout_us)
 {
 	uint32_t per_us = g.count_per_ms / 1000;
@@ -104,10 +202,12 @@ bool cr_poll32(uint32_t off, uint32_t mask, uint32_t value, uint32_t timeout_us)
 	return false;
 }
 
-/*
- * Make every previous write visible to the host before publishing an
- * offset or raising an interrupt: uncached barrier word, EHB, SYNC,
- * read-back, then a register read that drains the bus.
+/**
+ * Make every previous write visible to the host.
+ *
+ * Used before publishing a CCB offset or raising an interrupt: writes the
+ * uncached barrier word, runs ``EHB`` and ``SYNC``, reads the word back, then
+ * reads a register so that the bus is drained.
  */
 void write_barrier(void)
 {
@@ -120,6 +220,13 @@ void write_barrier(void)
 	(void)cr_read32(CR_CORE_REVISION);
 }
 
+/**
+ * Raise the firmware-to-host interrupt.
+ *
+ * Increments ``osdata->interrupt_count[0]`` (the host uses it to recognise
+ * a new interrupt) between two write barriers, then sets the MIPS wrapper
+ * interrupt status.
+ */
 void notify_host(void)
 {
 	write_barrier();
@@ -131,6 +238,13 @@ void notify_host(void)
 }
 
 /* ------------------------------------------------------------- trace */
+/**
+ * Locate the trace buffer.
+ *
+ * Takes the address and size of thread 0's buffer from the trace control
+ * structure. Tracing stays off when either is zero; a write pointer outside
+ * the buffer is reset to 0.
+ */
 void trace_init(void)
 {
 	struct tracebuf *tb = g.tracebuf;
@@ -145,6 +259,15 @@ void trace_init(void)
 		tb->tb[0].trace_pointer = 0;
 }
 
+/**
+ * Map an SFID group number to its log-type group bit.
+ *
+ * Args:
+ *     gid: Group number, bits 12..15 of the SFID.
+ *
+ * Returns:
+ *     The ``ROGUE_FWIF_LOG_TYPE_GROUP_*`` bit that enables the group.
+ */
 static uint32_t group_bit(uint32_t gid)
 {
 	/* SFID group number -> ROGUE_FWIF_LOG_TYPE_GROUP_* bit */
@@ -156,6 +279,20 @@ static uint32_t group_bit(uint32_t gid)
 	return map[gid & 0xF];
 }
 
+/**
+ * Append one entry to the trace ring.
+ *
+ * Nothing is written unless tracing is on (``log_type`` bit 0) and the
+ * SFID's group is enabled. The entry is the SFID, the 64-bit GPU timer
+ * (high word first) and the parameters; it may wrap around the end of the
+ * ring. Interrupts are masked while the entry is written. Normally called
+ * through the :c:macro:`TRACE` macro.
+ *
+ * Args:
+ *     sfid: String format identifier (``SFID_*``).
+ *     params: The parameters.
+ *     n: Number of parameters; it must match the SFID's format string.
+ */
 void trace_emit(uint32_t sfid, const uint32_t *params, uint32_t n)
 {
 	struct tracebuf *tb = g.tracebuf;

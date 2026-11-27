@@ -1,22 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Parameter Manager: free-list / list loads, PM context bookkeeping and the
- * out-of-memory handling (SPM).
+/**
+ * Parameter Manager: free-list and list loads, PM context bookkeeping, the
+ * cross-context free-list synchronisation, the out-of-memory handling (SPM)
+ * and the free-list reconstruction after a hardware recovery.
  *
  * Sources:
- *   docsClean/kick-geometry-ta.md phase B (Q16b-Q16m answers): free-list
- *     banks, live stack pointers, OOM / partial-render register changes;
- *   docsClean/partial-render-spm.md: SPM decisions, states, fidelity notes;
- *   E035 / E037: free-list and list stack-pointer load commands;
- *   mainline pvr_free_list.c: the host side of grow and reconstruction.
+ *
+ * - ``docsClean`` ``kick-geometry-ta.md`` phase B (answers to Q16b-Q16m):
+ *   free-list banks, live stack pointers, OOM and partial-render register
+ *   changes;
+ * - ``docsClean`` ``partial-render-spm.md``: SPM decisions, states, fidelity
+ *   notes;
+ * - E035 and E037: the free-list and list stack-pointer load commands;
+ * - mainline ``pvr_free_list.c``: the host side of grow and reconstruction.
  */
+/**/
 #include "kick.h"
 #include "pm.h"
 
 /* ------------------------------------------------------------ registers */
-/* stack-pointer load values per PM context (kick-geometry-ta.md B step 5) */
+/**
+ * ALIST stack-pointer load registers per PM context (``kick-geometry-ta.md``
+ * B step 5); the live values are at ``0x0270`` / ``0x0280``.
+ */
 static const uint16_t alist_sp_load[2] = { 0x0268, 0x0278 };   /* live 0x0270 / 0x0280 */
+/** MLIST stack-pointer load registers per PM context (live at ``0x02C0`` / ``0x02D0``). */
 static const uint16_t mlist_sp_load[2] = { 0x02B8, 0x02C8 };   /* live 0x02C0 / 0x02D0 */
 #define CR_PM_ALIST_SP_CMD       0x0288   /* E037: load commands, write 1, wait bit 0 = 0 */
 #define CR_PM_MLIST_SP_CMD       0x0190
@@ -27,13 +36,30 @@ static const uint16_t mlist_sp_load[2] = { 0x02B8, 0x02C8 };   /* live 0x02C0 / 
 #define CR_PM_TLB_INVAL          0x1348   /* PM TLB invalidate, self-clearing */
 #define FREELIST_BASE_ALIGN      16u      /* ROGUE_BIF_PM_FREELIST_BASE_ADDR_ALIGNSIZE */
 
+/** The registers of one free-list bank of a PM context. */
 struct fl_regs {
-	uint16_t base, top, cnt, cmd;     /* load registers and load command */
-	uint16_t live_sp, live_pb, live_mmu;
-	uint8_t top_shift;                /* position of the stack top in the 64-bit top register */
+	/** Base-address load register. */
+	uint16_t base;
+	/** Stack-top load register (64-bit). */
+	uint16_t top;
+	/** Page-count load registers (pages, then MMU pages at ``+4``). */
+	uint16_t cnt;
+	/** Load command: write 1, wait until bit 0 clears. */
+	uint16_t cmd;
+	/** Live stack pointer. */
+	uint16_t live_sp;
+	/** Live allocated page count. */
+	uint16_t live_pb;
+	/** Live allocated MMU page count. */
+	uint16_t live_mmu;
+	/** Position of the stack top in the 64-bit top register. */
+	uint8_t top_shift;
 };
 
-/* [ctx][which]: E035 statements, Q16b-Q16k answers */
+/**
+ * Free-list bank registers, indexed ``[PM context][local or global]`` (E035,
+ * answers to Q16b-Q16k).
+ */
 static const struct fl_regs flr[2][2] = {
 	[PM_CTX_GEOM] = {
 		[PM_FL_LOCAL]  = { 0x0210, 0x0220, 0x0390, 0x0208, 0x0348, 0x03A0, 0x2000, 32 },
@@ -45,20 +71,38 @@ static const struct fl_regs flr[2][2] = {
 	},
 };
 
+/** MLIST base register per PM context. */
 static const uint16_t mlist_base[2] = { 0x02D8, 0x02E0 };
+/** VCE, TE and ALIST catalogue-base registers per PM context. */
 static const uint16_t cat_base[2][3] = {
 	{ CR_BIF_PM_CAT_BASE_VCE0, CR_BIF_PM_CAT_BASE_TE0, CR_BIF_PM_CAT_BASE_ALIST0 },
 	{ CR_BIF_PM_CAT_BASE_VCE1, CR_BIF_PM_CAT_BASE_TE1, CR_BIF_PM_CAT_BASE_ALIST1 },
 };
 
+/** What each PM context holds (see :c:struct:`pm_slot`). */
 struct pm_slot pm_slots[2];
 
+/**
+ * Run a PM load command: write 1 and wait (10 ms at most) until bit 0 clears.
+ *
+ * Args:
+ *     reg: The command register.
+ *
+ * Returns:
+ *     ``true`` when the command completed.
+ */
 static bool pm_cmd(uint32_t reg)
 {
 	cr_write32(reg, 1);
 	return cr_poll32(reg, 1, 0, 10000);
 }
 
+/**
+ * Select the PM context that the following loads go to (Q16h, E037).
+ *
+ * Args:
+ *     ctx: ``PM_CTX_GEOM`` or ``PM_CTX_FRAG``.
+ */
 void pm_select(uint32_t ctx)
 {
 	uint32_t a = cr_read32(CR_PM_CTX_SEL_A), b = cr_read32(CR_PM_CTX_SEL_B);
@@ -74,6 +118,20 @@ void pm_select(uint32_t ctx)
 	cr_write32(CR_PM_CTX_SEL_B, b);
 }
 
+/**
+ * Load a free list into a PM context.
+ *
+ * Writes the base, stack top and page counts, then runs the bank's load
+ * command.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     which: ``PM_FL_LOCAL`` or ``PM_FL_GLOBAL``.
+ *     fl: The free list.
+ *
+ * Returns:
+ *     ``true`` when the load command completed.
+ */
 bool pm_load_freelist(uint32_t ctx, uint32_t which, const struct pm_freelist *fl)
 {
 	const struct fl_regs *r = &flr[ctx][which];
@@ -88,6 +146,14 @@ bool pm_load_freelist(uint32_t ctx, uint32_t which, const struct pm_freelist *fl
 	return pm_cmd(r->cmd);
 }
 
+/**
+ * Copy a PM context's live free-list state back into the free list.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     which: ``PM_FL_LOCAL`` or ``PM_FL_GLOBAL``.
+ *     fl: The free list that receives the stack top and page counts.
+ */
 void pm_store_freelist(uint32_t ctx, uint32_t which, struct pm_freelist *fl)
 {
 	const struct fl_regs *r = &flr[ctx][which];
@@ -100,6 +166,17 @@ void pm_store_freelist(uint32_t ctx, uint32_t which, struct pm_freelist *fl)
 	      fl->current_stack_top, fl->allocated_page_count, fl->allocated_mmu_page_count);
 }
 
+/**
+ * Load the MLIST base and the catalogues of a PM context, without the
+ * stack-pointer loads (a first geometry kick).
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     mlist: MLIST device address.
+ *     vce: VCE catalogue base.
+ *     te: TE catalogue base.
+ *     alist: ALIST catalogue base.
+ */
 void pm_load_bases(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist)
 {
 	cr_write64(mlist_base[ctx], mlist);
@@ -108,7 +185,19 @@ void pm_load_bases(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint
 	cr_write64(cat_base[ctx][2], alist);
 }
 
-/* Bases plus the stack-pointer load pulses: not on a first geometry kick. */
+/**
+ * Load the MLIST base, the catalogues and the ALIST/MLIST stack pointers of
+ * a PM context (every load except a first geometry kick).
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     mlist: MLIST device address.
+ *     vce: VCE catalogue base.
+ *     te: TE catalogue base.
+ *     alist: ALIST catalogue base.
+ *     alist_sp: ALIST stack pointer.
+ *     mlist_sp: MLIST stack pointer.
+ */
 void pm_load_lists(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint64_t alist,
 		   uint64_t alist_sp, uint32_t mlist_sp)
 {
@@ -119,11 +208,14 @@ void pm_load_lists(uint32_t ctx, uint64_t mlist, uint64_t vce, uint64_t te, uint
 	pm_cmd(CR_PM_ALIST_SP_CMD);
 }
 
-/*
- * PM-MMU / PM-TLB invalidation: every first geometry kick, every HWRTData
- * switch in a PM context and every 3D finished (kick-geometry-ta.md B step 3).
- * Without it the PM keeps catalogue/TLB entries of the previous HWRTData and
- * the second HWRTData of a dataset stalls or faults (E041, E042).
+/**
+ * Invalidate the PM's MMU and TLB.
+ *
+ * Needed at every first geometry kick, every HWRTData switch in a PM context
+ * and every 3D finished (``kick-geometry-ta.md`` B step 3). Without it the PM
+ * keeps catalogue and TLB entries of the previous HWRTData, and the second
+ * HWRTData of a dataset stalls or faults (E041, E042). Invalidates the PM
+ * lines of the SLC, the BIF page-catalogue cache and the PM TLB.
  */
 void pm_mmu_inval(void)
 {
@@ -136,11 +228,18 @@ void pm_mmu_inval(void)
 		TRACE(SFID_DBG_2, 0xE0431348u);
 }
 
-/*
- * Before another HWRTData is loaded into a PM context, store the free-list
- * state the context holds ("Store Freelist ... for PMDM<n>"). Without it, two
- * renders that interleave (geometry A, geometry B, fragment A) leave A's free
- * lists stale, and the PM can hand out pages that are still in use (E041).
+/**
+ * Store the free-list state a PM context holds before another HWRTData is
+ * loaded into it ("Store Freelist ... for PMDM<n>").
+ *
+ * Without it, two renders that interleave (geometry A, geometry B,
+ * fragment A) leave A's free lists stale, and the PM can hand out pages that
+ * are still in use (E041). Not called at present:
+ * :c:func:`pm_sync_load_freelists` does this as part of each load.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     next_hwrt: Firmware address of the HWRTData about to be loaded.
  */
 void pm_slot_evict(uint32_t ctx, fwaddr_t next_hwrt)
 {
@@ -161,17 +260,32 @@ void pm_slot_evict(uint32_t ctx, fwaddr_t next_hwrt)
 	sl->dirty = false;
 }
 
-/*
- * The context's free-list state was stored (fragment load for context 0, end
- * of the fragment for context 1): the structs are now the newest copy, and a
+/**
+ * Record that a PM context's free-list state was stored.
+ *
+ * Happens at the fragment load for context 0 and at the end of the fragment
+ * for context 1. The free-list structures are then the newest copy, and a
  * later eviction must not overwrite them with the stale registers. Without
  * this, the second render of an HWRTData pair hung the TA (E041).
+ *
+ * Args:
+ *     ctx: The PM context.
  */
 void pm_slot_stored(uint32_t ctx)
 {
 	pm_slots[ctx].dirty = false;
 }
 
+/**
+ * Record that a PM context was loaded from an HWRTData.
+ *
+ * Its free lists are remembered and its live state is marked newer than the
+ * structures.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     hwrt: Firmware address of the HWRTData; 0 empties the slot.
+ */
 void pm_slot_set(uint32_t ctx, fwaddr_t hwrt)
 {
 	const void *h = fwptr(hwrt);
@@ -183,16 +297,32 @@ void pm_slot_set(uint32_t ctx, fwaddr_t hwrt)
 	pm_slots[ctx].dirty = hwrt != 0;
 }
 
+/** Forget what both PM contexts hold (power-off, hardware recovery). */
 void pm_invalidate(void)
 {
 	memset(pm_slots, 0, sizeof(pm_slots));
 }
 
+/**
+ * Which free lists the two PM contexts share (Q38): bit 1 set when the local
+ * lists differ, bit 0 when the global lists differ.
+ */
 #define CR_PM_CONTEXT_PB_BASE    0x02B0   /* bit 1: local FL differs, bit 0: global (Q38) */
+/** ``CR_PM_PAGE_MANAGEOP`` bit that pauses PM context 0 (TA allocation). */
 #define PM_PAUSE_TA_ALLOC        1u       /* CR_PM_PAGE_MANAGEOP bit for PM context 0 */
+/** ``CR_PM_PAGE_MANAGEOP`` bit that pauses PM context 1 (3D deallocation). */
 #define PM_PAUSE_3D_DEALLOC      2u       /* ... for PM context 1 */
 
-/* Is the other PM context's DM running its PM work right now? */
+/**
+ * Check whether a PM context's data master is doing PM work right now.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *
+ * Returns:
+ *     ``true`` while the geometry runs (context 0), or while a 3D render
+ *     (not a transfer) runs (context 1).
+ */
 static bool pm_ctx_running(uint32_t ctx)
 {
 	if (ctx == PM_CTX_GEOM)
@@ -200,6 +330,17 @@ static bool pm_ctx_running(uint32_t ctx)
 	return dms[DM_FRAG].busy && dms[DM_FRAG].hwrt;   /* a 3D render, not a TQ_3D */
 }
 
+/**
+ * Pause or resume a PM context through ``CR_PM_PAGE_MANAGEOP``.
+ *
+ * A context is only paused when its data master runs, and the change is
+ * waited for in ``CR_PM_PAGE_MANAGEOP_ACK``.
+ *
+ * Args:
+ *     ctx: The PM context.
+ *     on: Pause (``true``) or resume.
+ *     paused: The pause bits this caller set; updated.
+ */
 static void pm_pause_ctx(uint32_t ctx, bool on, uint32_t *paused)
 {
 	uint32_t bit = ctx == PM_CTX_GEOM ? PM_PAUSE_TA_ALLOC : PM_PAUSE_3D_DEALLOC;
@@ -213,15 +354,30 @@ static void pm_pause_ctx(uint32_t ctx, bool on, uint32_t *paused)
 	*paused = on ? *paused | bit : *paused & ~bit;
 }
 
-/*
- * Load the free lists of HWRTData `hwrt` into PM context `c` while the other
- * PM context may be running on the other DM, for another context
- * (scheduler.md "Multi-context DM 2 / DM 3 concurrency and PM freelist sync",
- * Q38). For each list: the list C held is stored first unless the other
- * context owns it now; a list the other context holds is paused and stored
- * from there first, so that C gets its newest stack pointer. Then
- * CONTEXT_PB_BASE tells the PM which lists the two contexts share. The caller
- * loads the lists and catalogues afterwards; returns false if a load failed.
+/**
+ * Load an HWRTData's free lists into a PM context, synchronised with the
+ * other PM context.
+ *
+ * The other context may be running on the other data master for another
+ * render context (``scheduler.md`` "Multi-context DM 2 / DM 3 concurrency
+ * and PM freelist sync", Q38). For each list:
+ *
+ * - the list this context held is stored first, unless the other context
+ *   owns it now (then the other context is paused instead);
+ * - a list the other context holds is paused and stored from there first,
+ *   so that this context gets its newest stack pointer.
+ *
+ * The lists are then loaded, ``CONTEXT_PB_BASE`` tells the PM which lists the
+ * two contexts share, and the other context is resumed. The caller loads the
+ * catalogues and stack pointers afterwards.
+ *
+ * Args:
+ *     c: The PM context to load.
+ *     hwrt_fw: Firmware address of the HWRTData.
+ *     hwrt: The HWRTData.
+ *
+ * Returns:
+ *     ``false`` if a free-list load command did not complete.
  */
 bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
 {
@@ -266,6 +422,12 @@ bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
 }
 
 /* ------------------------------------------------- free-list page updates */
+/**
+ * Pause or resume the TA's page allocation (PM context 0).
+ *
+ * Args:
+ *     on: Pause (``true``) or resume.
+ */
 static void pm_pause(bool on)
 {
 	cr_write32(CR_PM_PAGE_MANAGEOP, on ? 1 : 0);
@@ -273,6 +435,16 @@ static void pm_pause(bool on)
 	TRACE(on ? SFID_PM_11 : SFID_PM_12, on ? 1u : 0u);
 }
 
+/**
+ * Recompute a free list's current base after its page count changed.
+ *
+ * The host fills the page array from its end (``pvr_free_list.c``), so the
+ * base is ``max_pages - current_pages`` entries into the array, aligned down
+ * to 16 bytes.
+ *
+ * Args:
+ *     fl: The free list.
+ */
 static void fl_rebase(struct pm_freelist *fl)
 {
 	/* the host fills the page array from its end: pvr_free_list.c */
@@ -281,10 +453,20 @@ static void fl_rebase(struct pm_freelist *fl)
 			       ~(uint64_t)(FREELIST_BASE_ALIGN - 1);
 }
 
-/*
- * N pages were added below the current base: the base moves down by 4 bytes per
- * page and the live stack pointer up by N (spec: 0x20C8 7 -> 0x47 for 64 pages).
- * Applied inside a PM_PAGE_MANAGEOP pause when the free list is loaded.
+/**
+ * Apply pages added to a free list.
+ *
+ * The pages are added below the current base: the base moves down by 4 bytes
+ * per page and the stack pointer up by the page count (the specification saw
+ * ``0x20C8`` go from 7 to ``0x47`` for 64 pages). When a PM context holds the
+ * list with the newest state, the live state is read, updated and reloaded
+ * inside a ``PM_PAGE_MANAGEOP`` pause; otherwise only the structure changes.
+ *
+ * Args:
+ *     addr: Firmware address of the free list.
+ *     fl: The free list, with ``current_pages`` already raised.
+ *     added: Number of pages added.
+ *     old_total: ``current_pages`` before the change (only traced).
  */
 static void fl_add_pages(fwaddr_t addr, struct pm_freelist *fl, uint32_t added, uint32_t old_total)
 {
@@ -314,15 +496,27 @@ static void fl_add_pages(fwaddr_t addr, struct pm_freelist *fl, uint32_t added, 
 }
 
 /* ------------------------------------------------------------------ SPM */
-/*
- * Pages a grow update added while the geometry was not waiting for them: in
- * the reference they are handed out at the next OOM, not loaded mid-run
- * (partial-render-spm.md, observed sequences); loading them into a running
- * PM stalled the TA in our first test.
- */
+/** Free lists whose grown pages can wait for the next out-of-memory event. */
 #define MAX_PENDING_GROW 4
+/**
+ * Pages a grow update added while the geometry was not waiting for them.
+ *
+ * The reference firmware hands them out at the next out-of-memory event,
+ * not mid-run (``partial-render-spm.md``, observed sequences); loading them
+ * into a running PM stalled the TA in our first test.
+ */
 static struct { fwaddr_t fl; uint32_t pages; } grown[MAX_PENDING_GROW];
 
+/**
+ * Find a free list's pending grown pages.
+ *
+ * Args:
+ *     fl: Firmware address of the free list.
+ *     create: Take a free entry when the list has none.
+ *
+ * Returns:
+ *     Pointer to the page count, or ``NULL``.
+ */
 static uint32_t *grown_slot(fwaddr_t fl, bool create)
 {
 	for (uint32_t i = 0; i < MAX_PENDING_GROW; i++)
@@ -338,12 +532,22 @@ static uint32_t *grown_slot(fwaddr_t fl, bool create)
 	return NULL;
 }
 
+/**
+ * The SPM state of the running geometry: its state, HWRTData, render
+ * context, the free list it waits for and its partial-render fence.
+ */
 static struct {
 	enum spm_state st;
 	fwaddr_t hwrt, cmd, wait_fl;
 	struct ufo pr_fence;
 } spm;
 
+/**
+ * Change the SPM state, and trace it.
+ *
+ * Args:
+ *     st: The new state.
+ */
 static void spm_set(enum spm_state st)
 {
 	static const uint32_t sfid[] = {
@@ -355,12 +559,24 @@ static void spm_set(enum spm_state st)
 	TRACE(sfid[st]);
 }
 
+/** Reset the SPM and forget the pending grown pages. */
 void spm_reset(void)
 {
 	memset(&spm, 0, sizeof(spm));
 	memset(grown, 0, sizeof(grown));
 }
 
+/**
+ * Arm the SPM for a geometry kick.
+ *
+ * A later kick of a render whose out-of-memory handling is still in progress
+ * keeps the current state.
+ *
+ * Args:
+ *     hwrt: Firmware address of the HWRTData.
+ *     cmd_fw: Firmware address of the render context.
+ *     pr_fence: The command's ``partial_render_geom_frag_fence`` UFO.
+ */
 void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
 {
 	if (spm.st != SPM_NONE && spm.hwrt == hwrt)
@@ -375,6 +591,7 @@ void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
  * TA control around an out-of-memory event (partial-render-spm.md, "Resuming
  * geometry after OOM", answer to Q28). None has a public name.
  */
+
 #define CR_PM_RESUME        0x0328   /* resumes the PM / TA after a free-list update */
 #define CR_TA_STOP_ON_OOM   0x0320
 #define CR_TA_PAUSE         0x0CF0   /* pause TE/TA state, self-clearing */
@@ -384,13 +601,18 @@ void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
 #define CR_PM_PR_RESTART_C  0x01B8   /* self-clearing */
 #define CR_TA_RESTART       0x0CA8
 
-/* ready pages: after the paused free-list update */
+/** Resume the PM and the TA after a free-list update that gave ready pages. */
 static void spm_resume_ta(void)
 {
 	cr_write32(CR_PM_RESUME, 1);
 }
 
-/* no ready pages: stop the TA until a grow update or a partial render */
+/**
+ * Stop the TA until a grow update or a partial render.
+ *
+ * Asks the TA to stop on the out-of-memory event, waits for
+ * ``TA_TERMINATE``, then pauses the TE/TA state.
+ */
 static void spm_pause_ta(void)
 {
 	cr_write32(CR_TA_STOP_ON_OOM, 1);
@@ -402,7 +624,7 @@ static void spm_pause_ta(void)
 		TRACE(SFID_DBG_2, 0xE0420CF0u);
 }
 
-/* after a grow update the paused geometry waited for */
+/** Restart the geometry paused by :c:func:`spm_pause_ta` after a grow update. */
 static void spm_unpause_ta(void)
 {
 	const void *hwrt = fwptr(spm.hwrt);
@@ -413,6 +635,12 @@ static void spm_unpause_ta(void)
 	cr_write32(CR_TA_UNPAUSE, 1);
 }
 
+/**
+ * Ask the host to grow a free list (``FWCCB_FREELIST_GROW``), once.
+ *
+ * Args:
+ *     fl: The free list.
+ */
 static void request_grow(struct pm_freelist *fl)
 {
 	struct fwccb_cmd c;
@@ -426,11 +654,29 @@ static void request_grow(struct pm_freelist *fl)
 	fwccb_send(&c);
 }
 
+/**
+ * Check whether the host can still grow a free list.
+ *
+ * Args:
+ *     fl: The free list.
+ *
+ * Returns:
+ *     ``true`` when it has a grow size and is below its maximum.
+ */
 static bool can_grow(const struct pm_freelist *fl)
 {
 	return fl->grow_pages && fl->current_pages + fl->ready_pages < fl->max_pages;
 }
 
+/**
+ * Arm a partial render.
+ *
+ * Without a partial-render fence nothing is armed (the watchdog decides).
+ * Otherwise the touched layers are listed (:c:func:`geom_rta_oom`, Q39) and
+ * the state becomes ``SPM_WAIT_HW``: the scheduler then runs the fragment
+ * context's ``FRAG_PR`` as a partial render, looking past its ``FENCE_PR``
+ * without consuming it.
+ */
 static void start_partial_render(void)
 {
 	volatile uint32_t *p = fwptr(spm.pr_fence.addr & ~UFO_ADDR_IS_SYNC_CHECKPOINT);
@@ -455,21 +701,37 @@ static void start_partial_render(void)
 	spm_set(SPM_WAIT_HW);
 }
 
-/*
- * SPM failing-UFO check (partial-render-spm.md fidelity notes): while a
- * partial render is armed, a FENCE_PR UFO that only waits for this geometry
- * (its queue timeline, the address of partial_render_geom_frag_fence) does
- * not block the partial render.
+/**
+ * The SPM failing-UFO check (``partial-render-spm.md`` fidelity notes).
+ *
+ * While a partial render is armed, a ``FENCE_PR`` UFO that only waits for this
+ * geometry (its queue timeline: the address of
+ * ``partial_render_geom_frag_fence``) does not block the partial render.
+ *
+ * Args:
+ *     u: The unsatisfied UFO.
+ *
+ * Returns:
+ *     ``true`` when the UFO may be passed.
  */
 bool spm_pr_fence_ok(const struct ufo *u)
 {
 	return spm.st == SPM_WAIT_HW && spm.pr_fence.addr && u->addr == spm.pr_fence.addr;
 }
 
-/*
- * PM_OUT_OF_MEMORY while the geometry runs. The firmware does not ask the
- * hardware which list ran out: it always extends the HWRTData's global free
- * list (freelists[1]; [2] for a secondary geometry pipe, flags bit 8).
+/**
+ * Handle ``PM_OUT_OF_MEMORY`` while the geometry runs.
+ *
+ * The firmware does not ask the hardware which list ran out: it always
+ * extends the HWRTData's global free list (``freelists[1]``; ``[2]`` for a
+ * secondary geometry pipe, flags bit 8).
+ *
+ * 1. Pages from a grow update that arrived while the geometry ran, or else
+ *    the ready pages, are added at once and the TA resumes; more is
+ *    requested from the host in the background.
+ * 2. With nothing ready the TA is stopped; the host is asked to grow the
+ *    list if it can (state ``SPM_WAIT_GROW``), otherwise a partial render is
+ *    armed.
  */
 void spm_oom(void)
 {
@@ -525,6 +787,20 @@ void spm_oom(void)
 	start_partial_render();
 }
 
+/**
+ * Handle a KCCB ``FREELIST_GROW_UPDATE``: the host grew a free list.
+ *
+ * When the geometry is not waiting for this list, the new pages are held
+ * until its next out-of-memory event (or applied at once when no entry is
+ * free). When it waits, the pages (or the ready pages) are added and the TA
+ * restarts; if the host could not add any, a partial render is armed.
+ *
+ * Args:
+ *     addr: Firmware address of the free list.
+ *     delta: Pages added by the host (not used: derived from the totals).
+ *     new_pages: The list's new page total, ready pages included.
+ *     ready: Ready pages held back for the next out-of-memory event.
+ */
 void spm_grow_update(fwaddr_t addr, uint32_t delta, uint32_t new_pages, uint32_t ready)
 {
 	struct pm_freelist *fl = fwptr(addr);
@@ -569,19 +845,33 @@ void spm_grow_update(fwaddr_t addr, uint32_t delta, uint32_t new_pages, uint32_t
 	}
 }
 
+/**
+ * Check whether a partial render is armed for an HWRTData.
+ *
+ * Args:
+ *     hwrt: Firmware address of the HWRTData.
+ *
+ * Returns:
+ *     ``true`` in ``SPM_WAIT_HW`` for this HWRTData.
+ */
 bool spm_pr_armed(fwaddr_t hwrt)
 {
 	return spm.st == SPM_WAIT_HW && spm.hwrt == hwrt;
 }
 
+/** Record that the armed partial render was kicked. */
 void spm_pr_started(void)
 {
 	spm_set(SPM_PR_RUNNING);
 }
 
-/*
- * End of a partial render: restart the paused geometry
- * (partial-render-spm.md, "Restarting geometry after a partial render").
+/**
+ * Restart the paused geometry after a partial render.
+ *
+ * Follows ``partial-render-spm.md`` "Restarting geometry after a partial
+ * render": turns the partial-render mode off, drops the 3D PM context's
+ * state (it is the partial render's), selects PM context 0, pulses the
+ * restart registers, invalidates the PM TLB, then resumes the PM and the TA.
  */
 void spm_pr_done(void)
 {
@@ -611,8 +901,23 @@ void spm_pr_done(void)
 }
 
 /* ------------------------------------------------------------------ HWR */
+/** At most this many free lists per reconstruction request (``ROGUE_FWIF_MAX_FREELISTS_TO_RECONSTRUCT``). */
 #define MAX_FL_RECONSTRUCT 18   /* ROGUE_FWIF_MAX_FREELISTS_TO_RECONSTRUCT */
 
+/**
+ * Ask the host to rebuild the free lists after a hardware recovery
+ * (``hardware-recovery.md`` step 4).
+ *
+ * Collects, without duplicates, every free list loaded in a PM context and
+ * every free list of the given HWRTData, resets the SPM and the PM context
+ * tracking, marks those HWRTData ``HWR`` with the caches to be zeroed, and
+ * sends ``FWCCB_FREELISTS_RECONSTRUCTION`` with the list IDs and the HWR
+ * count.
+ *
+ * Args:
+ *     hwrts: Firmware addresses of the HWRTData in use.
+ *     n: Number of entries in ``hwrts``.
+ */
 void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n)
 {
 	struct fwccb_cmd c;

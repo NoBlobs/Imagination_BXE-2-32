@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Thalles Campagnani
 """Check that every TRACE(SFID_x, ...) passes the number of arguments its
-format string expects (the count in the "/* N: ..." comment of sfid.h).
+format string expects (the count packed in the SFID value, bits 16..23).
 
 A wrong count makes the host's trace parser consume the next entry's words
 (the cr_poll32 bug of E037).  SFID expressions that are not a single
@@ -44,9 +44,9 @@ def calls(text):
 def main(argv):
     nargs = {}
     for line in open(argv[1]):
-        m = re.match(r"#define (SFID_\w+) 0x[0-9A-Fa-f]+u /\* (\d+):", line)
+        m = re.match(r"#define (SFID_\w+) 0x([0-9A-Fa-f]+)u", line)
         if m:
-            nargs[m.group(1)] = int(m.group(2))
+            nargs[m.group(1)] = (int(m.group(2), 16) >> 16) & 0xFF
     bad = 0
     for path in argv[2:]:
         text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"),

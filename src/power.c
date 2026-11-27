@@ -1,23 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Power management: KCCB POW requests and the host power-sync handshake.
+/**
+ * Power management: KCCB ``POW`` requests and the host power-sync handshake.
  *
- * The host writes 0 to the power-sync word, sends POW and polls the word;
+ * The host writes 0 to the power-sync word, sends ``POW`` and polls the word;
  * the firmware writes 1 only once the requested transition is complete.
  */
+/**/
 #include "fw.h"
 #include "mips.h"
 #include "kick.h"
 #include "pm.h"
 
-/* internal "pow flags" (only printed in the trace) */
+/** Internal "pow flag": a power-off is in progress (only printed in the trace). */
 #define PF_OFF_PENDING   0x10000u
+/** Internal "pow flag": the GPU is held in forced idle. */
 #define PF_FORCED_IDLE   0x40000u
+/** Internal "pow flag": the power-off was a forced request. */
 #define PF_FORCED_REQ    0x80000u
 
+/** The ``PF_*`` flags; they only appear in the trace. */
 static uint32_t pow_flags;
 
+/**
+ * Set the firmware power state.
+ *
+ * The state is kept in :c:var:`g` and mirrored into the host-visible
+ * ``sysdata`` once that structure is known.
+ *
+ * Args:
+ *     s: The new state, one of the ``POW_STATE_*`` values.
+ */
 void pow_set_state(uint32_t s)
 {
 	g.pow_state = s;
@@ -25,6 +38,13 @@ void pow_set_state(uint32_t s)
 		g.sysdata->pow_state = s;
 }
 
+/**
+ * Complete the host power-sync handshake.
+ *
+ * Writes 1 to the power-sync word named in ``osdata`` (after a write
+ * barrier, so that the state written before it is visible first) and raises
+ * the host interrupt.
+ */
 static void power_sync_signal(void)
 {
 	volatile uint32_t *sync = g.osdata ? fwptr(g.osdata->power_sync_fw_addr) : NULL;
@@ -35,6 +55,13 @@ static void power_sync_signal(void)
 	notify_host();
 }
 
+/**
+ * Forget every piece of GPU state that a power-off loses.
+ *
+ * Flushes the dynamic MIPS TLB mappings, clears the BIF catalogue slot table
+ * (:c:func:`kick_init`), the parameter-manager context tracking
+ * (:c:func:`pm_invalidate`) and the SPM state (:c:func:`spm_reset`).
+ */
 static void gpu_teardown(void)
 {
 	TRACE(SFID_MAIN_145);
@@ -51,6 +78,22 @@ static void gpu_teardown(void)
 	spm_reset();
 }
 
+/**
+ * Handle a KCCB ``POW`` command.
+ *
+ * - ``POW_FORCED_IDLE_REQ`` with ``POWER_FORCE_IDLE`` or
+ *   ``POWER_HOST_TIMEOUT`` stops accepting work and runs the scheduler;
+ *   any other argument cancels the forced idle.
+ * - ``POW_OFF_REQ`` tears the GPU state down, marks the firmware powered off
+ *   and stops the polling timer interrupt until the next boot.
+ * - ``POW_NUM_UNITS_CHANGE``, ``POW_APM_LATENCY_CHANGE`` and anything else
+ *   are acknowledged without action.
+ *
+ * Every request ends with the power-sync handshake.
+ *
+ * Args:
+ *     cmd: The KCCB command; ``cmd->data.pow`` holds the request.
+ */
 void pow_handle(const struct kccb_cmd *cmd)
 {
 	uint32_t type = cmd->data.pow.pow_type;

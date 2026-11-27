@@ -5,7 +5,7 @@
 Architecture
 ============
 
-The **PowerVR Rogue BXE-2-32** GPU (BVNC ``36.29.52.182`` — Branch 36,
+The **Imagination Rogue BXE-2-32** GPU (BVNC ``36.29.52.182`` — Branch 36,
 Version 29, Number of scalable units 52, Config 182; single core ``MC1``,
 Rogue XE family) contains an internal **MIPS32r2 / microMIPS**
 microcontroller inside its MIPS wrapper (:dc:`overview`). The host CPU does
@@ -44,7 +44,7 @@ Target summary
    * - Item
      - Value
    * - GPU core
-     - PowerVR Rogue BXE-2-32, BVNC ``36.29.52.182``, 1 core (``MC1``), XE
+     - Imagination Rogue BXE-2-32, BVNC ``36.29.52.182``, 1 core (``MC1``), XE
        family (``XE_ARCHITECTURE = 1``)
    * - SoC integration
      - SpacemiT K1 (8× X60 RISC-V), GPU MMIO at ``0xCAC00000`` (512 KiB),

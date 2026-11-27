@@ -1,10 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/* Kernel CCB (host -> firmware) and Firmware CCB (firmware -> host). */
+/**
+ * The Kernel CCB (host to firmware) and the Firmware CCB (firmware to host).
+ *
+ * Both are rings of fixed-size commands with a control block of read and
+ * write offsets and a wrap mask. The firmware owns the KCCB read offset and
+ * the FWCCB write offset.
+ */
+/**/
 #include "fw.h"
 #include "mips.h"
 #include "pm.h"
 
+/**
+ * Handle ``CORECLKSPEEDCHANGE``.
+ *
+ * Takes the new clock from the runtime configuration, recomputes the timer
+ * rates and re-correlates the GPU and host time. A zero clock is ignored.
+ */
 static void clock_change(void)
 {
 	uint32_t hz = g.runtime_cfg ? g.runtime_cfg->core_clock_speed : 0;
@@ -18,6 +31,22 @@ static void clock_change(void)
 	TRACE(SFID_MAIN_93, hz);
 }
 
+/**
+ * Execute one Kernel CCB command.
+ *
+ * Commands without the ``ROGUE_CMD_MAGIC_DWORD`` in the upper half of
+ * ``cmd_type`` are traced and skipped. Kicks, cleanups, MMU and SLC cache
+ * operations, power requests, force updates, clock changes, state-flag
+ * changes and free-list grow updates are handled; the other known commands
+ * are acknowledged without action.
+ *
+ * Args:
+ *     cmd: The command.
+ *
+ * Returns:
+ *     The return-slot value: ``KCCB_RTN_CMD_EXECUTED``, plus the flags the
+ *     handler adds (for example ``KCCB_RTN_CLEANUP_BUSY``).
+ */
 static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 {
 	uint32_t rtn = KCCB_RTN_CMD_EXECUTED;
@@ -111,6 +140,14 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 	return rtn;
 }
 
+/**
+ * Execute every pending Kernel CCB command.
+ *
+ * Runs with interrupts masked. For each command it writes the return slot,
+ * counts it in ``osdata``, and advances the read offset after a write
+ * barrier. Stops early once a command powers the firmware off. Interrupts
+ * the host once if any command was executed.
+ */
 void kccb_process(void)
 {
 	struct ccb_ctl *ctl = g.kccb_ctl;
@@ -146,6 +183,18 @@ void kccb_process(void)
 	irq_restore(s);
 }
 
+/**
+ * Send a command to the host through the Firmware CCB.
+ *
+ * When the ring is full it interrupts the host and waits (10 µs at a time)
+ * until the host has read an entry.
+ *
+ * Args:
+ *     cmd: The command to copy into the ring.
+ *
+ * Returns:
+ *     ``true`` when sent, ``false`` when the FWCCB is not known yet.
+ */
 bool fwccb_send(const struct fwccb_cmd *cmd)
 {
 	struct ccb_ctl *ctl = g.fwccb_ctl;

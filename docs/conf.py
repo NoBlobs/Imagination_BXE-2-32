@@ -7,14 +7,20 @@ from pathlib import Path
 
 from docutils import nodes
 
-project = "PowerVR Rogue BXE-2-32 free GPU firmware"
+project = "Imagination Rogue BXE-2-32 free GPU firmware"
 author = "Thalles Campagnani"
 copyright = "2026, Thalles Campagnani"
 language = "en"
 
 # sphinx_rtd_dark_mode adds a light/dark toggle button to the RTD theme;
 # the choice is remembered by the browser.
-extensions = ["sphinx_rtd_theme", "sphinx_rtd_dark_mode"]
+extensions = [
+    "sphinx_rtd_theme",
+    "sphinx_rtd_dark_mode",
+    "sphinx.ext.napoleon",
+    "hawkmoth",
+    "hawkmoth.ext.napoleon",
+]
 default_dark_mode = False
 exclude_patterns = [
     "_build",
@@ -24,6 +30,103 @@ exclude_patterns = [
     "requirements.txt",
     "logRefs",
 ]
+
+# ---------------------------------------------------------------------------
+# Hawkmoth: the "Firmware (Source)" pages are generated from the /** */
+# documentation comments in src/ (Google style: Args:/Returns:, through napoleon),
+# parsed with libclang as the firmware is built: freestanding C23 for MIPS.
+# LIBCLANG=/path/to/libclang.so overrides the system library.
+# ---------------------------------------------------------------------------
+import os
+
+import clang.cindex
+
+for _lib in (os.environ.get("LIBCLANG"), "/usr/lib/libclang.so",
+             "/usr/lib64/libclang.so"):
+    if _lib and Path(_lib).exists():
+        clang.cindex.Config.set_library_file(_lib)
+        break
+
+hawkmoth_root = str(Path(__file__).resolve().parent.parent / "src")
+hawkmoth_clang = [
+    "-target", "mipsel-unknown-elf",
+    "-std=c23",
+    "-ffreestanding",
+    f"-I{hawkmoth_root}/include",
+]
+hawkmoth_transform_default = "napoleon"   # Google-style comments
+
+
+# ---------------------------------------------------------------------------
+# Assembly sources: libclang cannot parse boot.S and vectors.S, so their /** */
+# comments are extracted here, in the same Google style.
+#
+#   .. asm-autodoc:: boot.S
+#
+# A comment followed by `.globl NAME` or `NAME:` documents that entry point
+# (shown as a C function); one followed by `.macro NAME args` documents the
+# macro; any other is text for the file.
+# ---------------------------------------------------------------------------
+_ASM_DOC = re.compile(r"/\*\*(?!/)(.*?)\*/", re.S)
+_ASM_SYM = re.compile(r"^\s*(?:\.globl\s+(\w+)|\.macro\s+(\w+)(.*)|(\w+):)")
+
+
+def _asm_comment_lines(body):
+    lines = body.strip("\n").split("\n")
+    out = []
+    for ln in lines:
+        ln = ln.rstrip()
+        ln = re.sub(r"^\s*\* ?", "", ln) if ln.lstrip().startswith("*") else ln.strip()
+        out.append(ln)
+    while out and not out[-1]:
+        out.pop()
+    while out and not out[0]:
+        out.pop(0)
+    return out
+
+
+def _asm_entries(path):
+    text = path.read_text()
+    for m in _ASM_DOC.finditer(text):
+        rest = text[m.end():].lstrip("\n").split("\n", 1)[0]
+        sym = _ASM_SYM.match(rest)
+        lines = _asm_comment_lines(m.group(1))
+        if not sym:
+            yield None, lines
+        elif sym.group(2):
+            args = [a for a in re.split(r"[\s,]+", sym.group(3).strip()) if a]
+            args = [a.split("=")[0] for a in args]
+            yield f".. c:macro:: {sym.group(2)}({', '.join(args)})", lines
+        else:
+            yield f".. c:function:: void {sym.group(1) or sym.group(4)}(void)", lines
+
+
+def _asm_setup(app):
+    from docutils.parsers.rst import Directive
+    from docutils.statemachine import StringList
+    from sphinx.ext.napoleon.docstring import GoogleDocstring
+
+    class AsmAutodoc(Directive):
+        required_arguments = 1
+        has_content = False
+
+        def run(self):
+            path = Path(hawkmoth_root) / self.arguments[0]
+            env = self.state.document.settings.env
+            env.note_dependency(str(path))
+            rst = []
+            for head, lines in _asm_entries(path):
+                body = str(GoogleDocstring(lines, app.config)).split("\n")
+                if head is None:
+                    rst += body + [""]
+                else:
+                    rst += [head, ""] + ["   " + ln if ln else "" for ln in body] + [""]
+            node = nodes.section()
+            node.document = self.state.document
+            self.state.nested_parse(StringList(rst, str(path)), 0, node)
+            return node.children
+
+    app.add_directive("asm-autodoc", AsmAutodoc)
 
 # Read the Docs theme (same as SpacemiT_K1_DDR and SpacemiT_K3_DDR)
 html_theme = "sphinx_rtd_theme"
@@ -129,4 +232,5 @@ def setup(app):
     app.add_role("dc", dc_role)
     app.add_role("lr", lr_role)
     app.add_role("exp", exp_role)
+    _asm_setup(app)
     return {"parallel_read_safe": True}

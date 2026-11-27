@@ -1,21 +1,36 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Thalles Campagnani */
-/* Data-master kicks. */
+/**
+ * Data-master state shared by the scheduler and the kick code, and the
+ * functions of ``kick.c``, ``geom.c``, ``frag.c`` and ``hwr.c``.
+ */
+/**/
 #pragma once
 
 #include "fw.h"
 
+/** The task a data master runs. */
 struct dm_state {
+	/** A task is running. */
 	bool busy;
-	fwaddr_t ctx;           /* running context */
-	uint32_t cmd_off;       /* offset of the running command in its cCCB */
-	uint32_t event_mask;    /* EVENT_STATUS bits that complete the task */
-	uint32_t finish_sfid;   /* trace entry emitted on completion */
-	uint64_t kick_time;     /* ROGUE_CR_TIMER at kick */
-	fwaddr_t hwrt;          /* render target in use (geometry/fragment) */
+	/** Firmware address of the running context. */
+	fwaddr_t ctx;
+	/** Offset of the running command in its client CCB. */
+	uint32_t cmd_off;
+	/** ``CR_EVENT_STATUS`` bits that complete the task. */
+	uint32_t event_mask;
+	/** Trace entry written on completion. */
+	uint32_t finish_sfid;
+	/** ``CR_TIMER`` at the kick (for the lockup watchdog). */
+	uint64_t kick_time;
+	/** HWRTData in use (geometry and fragment). */
+	fwaddr_t hwrt;
+	/** BIF page-catalogue slot of the task's memory context. */
 	uint32_t bif_slot;
-	uint32_t flags;         /* geometry command flags (first/last kick) */
-	bool keep;              /* done, but the command stays queued (FRAG_PR) */
+	/** Geometry command flags (first and last kick). */
+	uint32_t flags;
+	/** Done, but the command stays queued (a ``FRAG_PR`` partial render). */
+	bool keep;
 };
 
 extern struct dm_state dms[DM_MAX];
@@ -35,7 +50,13 @@ void sched_poll(void);
 void bif_rebuild(void);
 
 /* hwr.c */
-enum { HWR_REASON_MMU_FAULT = 1, HWR_REASON_LOCKUP = 2 };
+/** Why :c:func:`hwr_recover` was called. */
+enum {
+	/** An MMU page fault. */
+	HWR_REASON_MMU_FAULT = 1,
+	/** A data master did not finish in time. */
+	HWR_REASON_LOCKUP = 2,
+};
 void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status);
 uint64_t kick_bif_pc(uint32_t slot);
 void hwr_watchdog(void);

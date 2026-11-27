@@ -1,13 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Thalles Campagnani */
-/*
- * Exception page (EBase = 0x9FC02000, KSEG0) and C runtime entry.
+/**
+ * Exception page (``EBase = 0x9FC02000``, KSEG0) and C runtime entry.
  *
- *   +0x000 TLB refill     -> dynamic mapping of the firmware heap
- *   +0x180 general        -> fatal exception report
- *   +0x400 HW0 timer      -> irq_dispatch(0)
- *   +0x500 HW1 BG task    -> irq_dispatch(1)
- *   +0x600 HW2 IRQ task   -> irq_dispatch(2)
+ * ========== ============== ===================================
+ * Offset     Vector         Handler
+ * ========== ============== ===================================
+ * ``+0x000`` TLB refill     dynamic mapping of the firmware heap
+ * ``+0x180`` general        fatal exception report
+ * ``+0x400`` HW0 timer      ``irq_dispatch(0)``
+ * ``+0x500`` HW1 BG task    ``irq_dispatch(1)``
+ * ``+0x600`` HW2 IRQ task   ``irq_dispatch(2)``
+ * ========== ============== ===================================
+ *
+ * The software interrupts (``+0x200``, ``+0x300``) and HW3-HW5 also reach
+ * ``irq_dispatch``, with source ids 8, 9 and 3-5, which count as spurious.
  */
 #include "layout.h"
 #include "regs.h"
@@ -18,6 +25,10 @@
 	.set	noat
 
 	.section .exc, "ax"
+/**
+ * Start of the exception page: a branch per vector to the handlers below.
+ * Each interrupt vector loads its source id into ``$26`` first.
+ */
 	.globl	_exc_base
 _exc_base:
 	.org	0x000
@@ -60,12 +71,16 @@ _exc_base:
 	nop
 
 	.org	0xA00
-/*
- * TLB refill (EXL=1, only $26/$27 free).  The TLB is always identity
- * (PFN = VA >> 12); the real 36-bit address goes to the wrapper remap entry
- * of the chosen slot (entry slot for the even page, slot+16 for the odd).
- * Pages without a valid host PTE, or outside the heap window, are sent to
- * the host fault page.
+/**
+ * TLB refill handler: map a page pair of the firmware heap on demand.
+ *
+ * Runs with ``EXL=1``; registers it uses are saved in the boot-data page.
+ * The TLB is always identity (``PFN = VA >> 12``); the real 36-bit address
+ * goes to the wrapper remap entry of the chosen slot (entry ``slot`` for the
+ * even page, ``slot + 16`` for the odd one), taken from the host's MIPS page
+ * table. Pages without a valid host PTE, or outside the heap window, are
+ * sent to the host fault page and counted. Slots are used round-robin after
+ * the wired ones.
  */
 refill_main:
 	lui	$27, 0xBFC0
@@ -188,7 +203,14 @@ refill_main:
 	eret
 	nop
 
-/* General exception: dump state into the boot-data page, call C, stop. */
+/**
+ * General exception handler.
+ *
+ * Saves ``Cause``, ``EPC`` and ``BadVAddr`` in the boot-data page and in the
+ * debug registers, switches to the stack with ``EXL`` cleared (so that TLB
+ * refills work in C), calls ``fatal_exception()`` and stops. A nested fault
+ * stops at once.
+ */
 general_main:
 	lui	$27, 0xBFC0
 	ori	$27, $27, 0x1000
@@ -225,7 +247,14 @@ general_main:
 	b	9b
 	nop
 
-/* Interrupt entry, $26 = source id. Runs on the wired stack with EXL=1. */
+/**
+ * Common interrupt entry.
+ *
+ * Saves the caller-saved registers, ``HI``/``LO``, ``EPC`` and ``Status`` on
+ * the wired stack, then calls ``irq_dispatch($26)`` with ``EXL=0`` and
+ * ``IE=0``, so that a TLB miss in C takes the normal refill vector and
+ * ``EPC`` stays meaningful. Restores everything and returns with ``ERET``.
+ */
 int_common:
 	addiu	$29, $29, -96
 	sw	$1, 0($29)
@@ -307,11 +336,14 @@ int_common:
 	eret
 	nop
 
-/*
- * void tlb_flush_dynamic(void)
- * Invalidate every non-wired TLB entry (distinct KSEG0 VPN, EntryLo = 0)
- * and disable its two remap entries.  Lives in the unmapped exception page
- * so that it never invalidates the page it is executing from.
+/**
+ * ``void tlb_flush_dynamic(void)``: drop every dynamic mapping.
+ *
+ * Invalidates every non-wired TLB entry (a distinct KSEG0 VPN with
+ * ``EntryLo = 0``), disables its two remap entries and resets the next
+ * dynamic slot. Lives in the unmapped exception page, so that it never
+ * invalidates the page it is executing from. Interrupts are masked while it
+ * runs.
  */
 	.globl	tlb_flush_dynamic
 	.type	tlb_flush_dynamic, @function
@@ -361,6 +393,12 @@ tlb_flush_dynamic:
 
 /* ------------------------------------------------------------------ */
 	.text
+/**
+ * C runtime entry, reached from ``_reset`` through ``ERET``.
+ *
+ * Clears ``.bss``, sets the stack pointer and calls ``fw_main()``, which
+ * never returns.
+ */
 	.globl	fw_entry
 	.ent	fw_entry
 fw_entry:

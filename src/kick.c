@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Data-master kicks and completion handling (see docsClean/data-masters.md,
- * kick-compute-and-3d.md, kick-geometry-ta.md).
+/**
+ * Data-master kicks and completion handling: the BIF page-catalogue slots,
+ * the compute and transfer kicks, the dispatch of a task to its kick
+ * function, and the completion events with their per-job cache flush.
+ *
+ * See ``docsClean`` ``data-masters.md``, ``kick-compute-and-3d.md`` and
+ * ``kick-geometry-ta.md``.
  */
+/**/
 #include "kick.h"
 #include "pm.h"
 
@@ -22,10 +27,22 @@
 static void dm_cache_flush(uint32_t dm);
 
 /* ------------------------------------------------------------ BIF */
+/** Number of BIF page-catalogue slots; slot 0 belongs to the firmware. */
 #define BIF_SLOTS 8
+/** Page catalogue bound to each slot; all ones when the slot is free. */
 static uint64_t bif_pc[BIF_SLOTS];
+/** The next slot to try when a new page catalogue must be bound. */
 static uint32_t bif_next = 1;
 
+/**
+ * Check whether a running task uses a BIF slot.
+ *
+ * Args:
+ *     slot: The slot.
+ *
+ * Returns:
+ *     ``true`` when a busy data master was kicked with this slot.
+ */
 static bool bif_slot_in_use(uint32_t slot)
 {
 	for (uint32_t d = 0; d < DM_MAX; d++)
@@ -34,7 +51,22 @@ static bool bif_slot_in_use(uint32_t slot)
 	return false;
 }
 
-/* Bind a memory context to a BIF catalogue slot (1..7); returns the slot. */
+/**
+ * Bind a memory context to a BIF catalogue slot.
+ *
+ * A page catalogue already bound keeps its slot. Otherwise the next slot not
+ * used by a running task is taken (slot 1 if every slot is busy); the SLC is
+ * flushed (page tables may sit stale in it, E015), ``CR_BIF_CAT_BASEn`` is
+ * written and the MMU caches are invalidated. The slot is recorded in the
+ * memory context's ``page_cat_base_reg_set``.
+ *
+ * Args:
+ *     memctx_addr: Firmware address of the ``fwmemcontext``.
+ *     dm: The data master that will use it (only traced).
+ *
+ * Returns:
+ *     The slot, 1 to 7.
+ */
 uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm)
 {
 	struct fwmemcontext *mc = fwptr(memctx_addr);
@@ -74,6 +106,17 @@ uint32_t bif_activate(fwaddr_t memctx_addr, uint32_t dm)
 	return slot;
 }
 
+/**
+ * Select the BIF slot a data master's requests use.
+ *
+ * Writes the data master's field of ``CR_BIF_CAT_BASE_INDEX`` (geometry
+ * bits 0..2, fragment 8..10, compute 16..18, TDM 19..21). Other data masters
+ * are ignored.
+ *
+ * Args:
+ *     dm: The data master.
+ *     slot: The slot.
+ */
 void bif_set_index(uint32_t dm, uint32_t slot)
 {
 	uint32_t lo = cr_read32(CR_BIF_CAT_BASE_INDEX);
@@ -90,12 +133,24 @@ void bif_set_index(uint32_t dm, uint32_t slot)
 	cr_write32(CR_BIF_CAT_BASE_INDEX, lo);
 }
 
+/**
+ * Get the page catalogue bound to a BIF slot (used by the HWR code).
+ *
+ * Args:
+ *     slot: The slot.
+ *
+ * Returns:
+ *     The page catalogue's bus address, or 0 when the slot is free.
+ */
 uint64_t kick_bif_pc(uint32_t slot)
 {
 	return slot < BIF_SLOTS && bif_pc[slot] != ~0ull ? bif_pc[slot] : 0;
 }
 
-/* After a GPU soft reset: re-program every bound page catalogue. */
+/**
+ * Re-program every bound page catalogue after a GPU soft reset, and
+ * invalidate the MMU caches.
+ */
 void bif_rebuild(void)
 {
 	for (uint32_t s = 1; s < BIF_SLOTS; s++)
@@ -104,8 +159,13 @@ void bif_rebuild(void)
 	cr_write32(CR_BIF_CTRL_INVAL, 0xF);
 }
 
+/**
+ * Set by :c:func:`kick_task` when the command must stay queued: neither run
+ * nor retired.
+ */
 bool kick_defer;
 
+/** Forget every BIF slot binding (at boot and at power-off). */
 void kick_init(void)
 {
 	for (uint32_t s = 0; s < BIF_SLOTS; s++)
@@ -113,12 +173,31 @@ void kick_init(void)
 	bif_next = 1;
 }
 
+/**
+ * Flush and invalidate the whole system-level cache, and wait (at most
+ * 10 ms) until the flush is done.
+ */
 void slc_flush_inval(void)
 {
 	cr_write32(CR_SLC_CTRL_FLUSH_INVAL, SLC_FLUSH_INVAL_ALL);
 	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
 }
 
+/**
+ * Record that a data master starts a task.
+ *
+ * Called by each kick function just before its trigger write. Fills the
+ * data master's :c:struct:`dm_state` and sets its bit in the debug register
+ * ``CR_SCRATCH15``. The geometry and fragment kicks set ``hwrt`` afterwards.
+ *
+ * Args:
+ *     dm: The data master.
+ *     ctxaddr: Firmware address of the context.
+ *     cmd_off: Offset of the command in the client CCB.
+ *     evmask: ``CR_EVENT_STATUS`` bits that complete the task.
+ *     finish_sfid: Trace entry written on completion.
+ *     slot: The BIF slot the task uses.
+ */
 void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 		     uint32_t finish_sfid, uint32_t slot)
 {
@@ -137,6 +216,24 @@ void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
 }
 
 /* ------------------------------------------------------------ compute */
+/**
+ * Kick a compute (``CDM``) command.
+ *
+ * Programs the multicore compute control, binds the memory context, writes
+ * the control stream, border colour table, context state and the context
+ * switch PDS programs, then starts the CDM. Completion is
+ * ``EV_COMPUTE_FINISHED``.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the context.
+ *     ctx: The compute context.
+ *     hdr: The command header.
+ *     cmd: The compute command.
+ *     cmd_off: Offset of the command in the client CCB.
+ *
+ * Returns:
+ *     ``true``: the CDM is running.
+ */
 static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		     const struct ccb_cmd_header *hdr, const struct cmd_compute *cmd,
 		     uint32_t cmd_off)
@@ -204,6 +301,27 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 #define CR_ISP_RENDER           0x0F08  /* public */
 #define CR_PIXEL_LAUNCH         0x0F00  /* no public name: pixel-pipe launch */
 
+/**
+ * Kick a transfer command on the fragment data master (``TQ_3D``).
+ *
+ * Writes the register table of ``kick-compute-and-3d.md`` (answer to Q13):
+ * background object, the fast-2D region registers when ``isp_render`` selects
+ * fast 2D, USC output and clear values, screen, tile size and origin, tiles
+ * in flight (``min(ISP_CTL[15:12] + 1, 2)``), ISP control and anti-aliasing,
+ * the end-of-render PDS program and the PBE words of the four render
+ * targets. It then launches the pixel pipe (answer to Q14). Completion is
+ * ``EV_PIXELBE_END_RENDER``.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the context.
+ *     ctx: The render context.
+ *     hdr: The command header.
+ *     cmd: The transfer command.
+ *     cmd_off: Offset of the command in the client CCB.
+ *
+ * Returns:
+ *     ``true``: the fragment data master is running.
+ */
 static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		      const struct ccb_cmd_header *hdr, const struct cmd_transfer *cmd,
 		      uint32_t cmd_off)
@@ -307,11 +425,17 @@ static bool kick_tq3d(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	return true;
 }
 
-/*
- * E027: dump the host structures behind a geometry / fragment command to the
- * debug trace (group DBG, mask 0x80007FFE), so they can be matched by value
- * against the registers the spec observed.  Each block starts with a DBG_2
- * tag (0xD0000000 | block id | byte offset) followed by DBG_9 lines of 8 words.
+/**
+ * Dump memory to the debug trace, 32 bytes per entry (E027).
+ *
+ * Each block of 8 words is a ``DBG_2`` tag (``tag | byte offset``) followed
+ * by a ``DBG_9`` entry with the words. The debug group must be enabled (log
+ * type mask ``0x80007FFE``).
+ *
+ * Args:
+ *     tag: Block tag, ``0xD0000000 | block id``.
+ *     base: Start of the memory; nothing is dumped when ``NULL``.
+ *     bytes: Size to dump.
  */
 static void dump_words(uint32_t tag, const void *base, uint32_t bytes)
 {
@@ -327,6 +451,21 @@ static void dump_words(uint32_t tag, const void *base, uint32_t bytes)
 	}
 }
 
+/**
+ * Dump the host structures behind a geometry or fragment command (E027).
+ *
+ * Dumps the command, its HWRTData, the HWRTData's common part and free
+ * lists, and for a geometry command the render context's static state and
+ * context state, so that they can be matched by value against the registers
+ * the specification observed. Built only with ``EXP_DUMP_RENDER``.
+ *
+ * Args:
+ *     id: ``CCB_CMD_GEOM`` or ``CCB_CMD_FRAG``.
+ *     ctxaddr: Firmware address of the render context.
+ *     ctx: The render context.
+ *     payload: The command.
+ *     size: The command's size.
+ */
 [[maybe_unused]] static void dump_render_cmd(uint32_t id, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 			    const void *payload, uint32_t size)
 {
@@ -351,6 +490,29 @@ static void dump_words(uint32_t tag, const void *base, uint32_t bytes)
 	}
 }
 
+/**
+ * Start a task command on its data master.
+ *
+ * Dispatches by command type to the compute, transfer, geometry or fragment
+ * kick. ``NULL``, ``ABORT``, ``PRE_TIMESTAMP`` and ``FBSC_INVALIDATE``
+ * complete at once. A ``FRAG_PR`` runs only when the SPM armed a partial
+ * render for its HWRTData; otherwise it completes without running, unless
+ * that HWRTData's geometry still runs (it may still run out of memory), in
+ * which case :c:var:`kick_defer` keeps it queued. Unimplemented commands are
+ * traced and complete without running, so the host never hangs.
+ *
+ * Args:
+ *     dm: The data master chosen by the scheduler.
+ *     ctxaddr: Firmware address of the context.
+ *     ctx: The context.
+ *     hdr: The command header.
+ *     payload: The command, right after the header.
+ *     cmd_off: Offset of the command in the client CCB.
+ *
+ * Returns:
+ *     ``true`` if the data master is now running the task, ``false`` if it
+ *     completed at once (or must wait, see :c:var:`kick_defer`).
+ */
 bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
 {
@@ -405,7 +567,12 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	}
 }
 
-/* MMU page fault while a DM runs: report it and recover (hwr.c). */
+/**
+ * Handle an MMU page fault while a data master runs.
+ *
+ * Traces the fault status of bank 0, clears the event and starts the
+ * hardware recovery (:c:func:`hwr_recover`).
+ */
 static void mmu_fault(void)
 {
 	uint64_t mmu = cr_read64(CR_BIF_FAULT_BANK0_MMU_STATUS);
@@ -432,6 +599,17 @@ static void mmu_fault(void)
 #define CR_FLUSH_1720   0x1720
 #define CR_FLUSH_1728   0x1728
 
+/**
+ * Per-job cache flush on completion, before the command is retired.
+ *
+ * Follows ``kick-compute-and-3d.md`` "Completion: per-job cache flush"
+ * (answer to Q14; geometry values from Q19b): front end, USC, PDS and TPU
+ * flushes, the MCU fence for the data master, then an SLC flush. Data
+ * masters other than geometry, fragment and compute only flush the SLC.
+ *
+ * Args:
+ *     dm: The data master that finished.
+ */
 static void dm_cache_flush(uint32_t dm)
 {
 	bool frag = dm == DM_FRAG;
@@ -469,6 +647,19 @@ static void dm_cache_flush(uint32_t dm)
 	cr_poll32(CR_SLC_STATUS0, SLC_STATUS_FLUSH_PENDING, 0, 10000);
 }
 
+/**
+ * Handle GPU events.
+ *
+ * An MMU page fault starts the recovery; a PM out-of-memory event while the
+ * geometry runs goes to the SPM (:c:func:`spm_oom`). Each busy data master
+ * whose completion event is set then finishes: a render-target array moves
+ * to its next layer instead (:c:func:`frag_rta_next`); otherwise the
+ * geometry post-processing runs, the caches are flushed, the fragment
+ * post-processing runs, and the task is retired (:c:func:`sched_dm_done`).
+ *
+ * Args:
+ *     ev: The ``CR_EVENT_STATUS`` bits that were set.
+ */
 void kick_events(uint32_t ev)
 {
 	cr_write32(CR_DBG_EVENTS_SEEN, cr_read32(CR_DBG_EVENTS_SEEN) | ev);
@@ -505,6 +696,13 @@ void kick_events(uint32_t ev)
 	}
 }
 
+/**
+ * Poll ``CR_EVENT_STATUS`` for the events the running tasks wait for.
+ *
+ * A backstop for a missed MTS interrupt task: called from the timer tick
+ * and the background task. Page faults, and out-of-memory while the geometry
+ * runs, are polled too.
+ */
 void sched_poll(void)
 {
 	uint32_t mask = 0;
@@ -523,6 +721,17 @@ void sched_poll(void)
 		kick_events(ev);
 }
 
+/**
+ * Check whether a running task uses a resource the host wants to free.
+ *
+ * Args:
+ *     type: ``CLEANUP_*`` type (not used: every type is compared with the
+ *         running HWRTData).
+ *     addr: Firmware address of the resource.
+ *
+ * Returns:
+ *     ``true`` when a busy data master uses it.
+ */
 bool kick_resource_busy(uint32_t type, fwaddr_t addr)
 {
 	(void)type;

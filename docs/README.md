@@ -3,7 +3,7 @@
 
 # docs — project documentation
 
-This folder holds the documentation of the free PowerVR Rogue **BXE-2-32**
+This folder holds the documentation of the free Imagination Rogue **BXE-2-32**
 (BVNC `36.29.52.182`) GPU firmware for the **SpacemiT K1** SoC. It is written
 by the clean team in reStructuredText (`.rst`) and built with Sphinx. It
 complements, and never modifies, the clean-room specification in
@@ -17,6 +17,7 @@ docs/
 ├── hardware/            BXE-2-32 GPU and K1 SoC hardware as seen by the firmware
 ├── linux-driver/        mainline Linux powervr driver integration and host contract
 ├── firmware/            clean-room GPLv3 firmware implementation
+├── firmware-source/     reference generated from the /** */ comments in src/ (Hawkmoth)
 ├── logRefs/             experiment log (E001…) and raw dumps in logRefs/data/
 ├── questions.md         questions for the clean-room spec maintainer (dirty team)
 ├── steps.md             roadmap: the remaining steps to finish the firmware
@@ -29,6 +30,7 @@ docs/
 |---|---|---|
 | `hardware/` | `CC-BY-SA-4.0` | GPU architecture (BVNC `36.29.52.182`, MIPS32r2 microMIPS core, data masters), two-stage MIPS translation and wrapper remap, RGX register map with provenance and writable-bit probe, GPU bring-up / Parameter Manager / flush / HWR hardware behaviour, reference board (`BPI-F3`) and bench safety rules. |
 | `linux-driver/` | `GPL-2.0-only` | Host side of the contract with mainline `drm/imagination` (`powervr.ko`) and Mesa `pvr`, kernel branch `IMG-BXE-2-32` (K1 APMU power domain, DT node, experimental BVNC), `.fw` container and FWIF ABI, host-firmware protocol (KCCB, FWCCB, IRQ, runtime PM, stats, HWR log, debugfs trace), scripts and test workflow. |
+| `firmware-source/` | `GPL-3.0-or-later` | Reference of every source file, function, structure and constant in `src/`, generated from their Google-style `/** */` comments: C with Hawkmoth (libclang), `boot.S` / `vectors.S` with a directive in `conf.py`. |
 | `firmware/` | `GPL-3.0-or-later` | Clean-room implementation (`src/`): source files, interrupt-driven execution model, clang/lld microMIPS toolchain and experiment knobs, `boot.S` / TLB refill / `gpu_init.c`, client CCB scheduler and data-master kicks (CDM, TQ_3D, experimental GEOM/FRAG), power / HWR / stats, current status and experiment findings (`E001`–`E040`). |
 
 ### Licenses
@@ -38,11 +40,12 @@ Each section follows the license of its corresponding domain, stated in the
 
 - `hardware/` carries **`CC-BY-SA-4.0`**, matching `docsClean/`.
 - `linux-driver/` carries **`GPL-2.0-only`**, matching the Linux kernel.
-- `firmware/` (and the Sphinx configuration/index files) carries **`GPL-3.0-or-later`**, matching the project `LICENSE`.
+- `firmware/` and `firmware-source/` (and the Sphinx configuration/index files) carry **`GPL-3.0-or-later`**, matching the project `LICENSE`.
 
 ## Building
 
-Requirements: `python3` with `venv` and network access on the first build.
+Requirements: `python3` with `venv`, network access on the first build, and
+`libclang` (the system library: `/usr/lib/libclang.so`, or set `LIBCLANG`).
 Sphinx and the [Read the Docs theme](https://sphinx-rtd-theme.readthedocs.io/)
 with the [dark mode toggle](https://github.com/MrDogeBro/sphinx_rtd_dark_mode)
 are installed into `docs/.venv/` the first time.

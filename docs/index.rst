@@ -6,7 +6,7 @@ Imagination BXE-2-32 — free GPU firmware: documentation
 =========================================================
 
 This is the project documentation for the free (GPLv3, GNU C23) firmware that
-runs on the internal MIPS microcontroller of the **PowerVR Rogue BXE-2-32** GPU
+runs on the internal MIPS microcontroller of the **Imagination Rogue BXE-2-32** GPU
 (BVNC ``36.29.52.182``) in the **SpacemiT K1** SoC. It is a clean-room
 implementation running under the unmodified mainline Linux ``powervr`` driver
 (apart from the experimental BVNC entry and K1 SoC enablement) and the Mesa
@@ -37,6 +37,7 @@ or investigated through experiments on our own firmware.
    hardware/index
    linux-driver/index
    firmware/index
+   firmware-source/index
 
 Current status
 ==============
@@ -116,5 +117,5 @@ first line:
 
 * ``hardware/`` — ``CC-BY-SA-4.0`` (matching :dc:`docsClean/ <README>`);
 * ``linux-driver/`` — ``GPL-2.0-only`` (matching the Linux kernel);
-* ``firmware/`` and the top-level Sphinx files — ``GPL-3.0-or-later``
-  (matching the project ``LICENSE``).
+* ``firmware/``, ``firmware-source/`` and the top-level Sphinx files —
+  ``GPL-3.0-or-later`` (matching the project ``LICENSE``).

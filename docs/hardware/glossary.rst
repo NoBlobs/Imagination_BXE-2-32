@@ -5,7 +5,7 @@
 Glossary
 ========
 
-Acronyms and terms used across the PowerVR Rogue BXE-2-32 hardware, driver
+Acronyms and terms used across the Imagination Rogue BXE-2-32 hardware, driver
 and firmware documentation (:dc:`glossary`).
 
 .. list-table::

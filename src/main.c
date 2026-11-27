@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
+/**
  * Firmware initialisation and interrupt dispatch.
  *
- * After boot the firmware has no main loop of its own: it sleeps in WAIT
- * and every piece of work runs from one of three interrupt sources (timer,
- * MTS background task, MTS interrupt task).  As a safety net the timer tick
- * also polls the Kernel CCB, so a missed MTS wake-up only costs latency.
+ * After boot the firmware has no main loop of its own: it sleeps in
+ * ``WAIT`` and every piece of work runs from one of three interrupt sources
+ * (timer, MTS background task, MTS interrupt task). As a safety net the timer
+ * tick also polls the Kernel CCB, so a missed MTS wake-up only costs latency.
  */
+/**/
 #include "fw.h"
 #include "mips.h"
 #include "kick.h"
 
+/** The firmware's global state (see :c:struct:`fw_state`). */
 struct fw_state g;
 
-/* Default timer period used as a polling backstop. */
+/** Timer period in milliseconds, used as a polling backstop. */
 #define TICK_MS 1
 
+/** Program CP0 ``Compare`` for the next timer tick, :c:macro:`TICK_MS` from now. */
 static void timer_arm(void)
 {
 	uint32_t period = g.count_per_ms * TICK_MS;
@@ -24,6 +27,16 @@ static void timer_arm(void)
 	mtc0(C0_COMPARE, 0, mfc0(C0_COUNT, 0) + period);
 }
 
+/**
+ * Derive the clock-dependent rates from the core clock.
+ *
+ * Sets ``core_clock_hz``, the GPU timer ticks per millisecond (clock / 256)
+ * and the CP0 ``Count`` ticks per millisecond (clock / 2). Neither rate is
+ * ever left at zero.
+ *
+ * Args:
+ *     hz: Core clock in Hz; 0 selects 307.2 MHz.
+ */
 static void clocks_update(uint32_t hz)
 {
 	if (!hz)
@@ -37,6 +50,15 @@ static void clocks_update(uint32_t hz)
 		g.count_per_ms = 1;
 }
 
+/**
+ * Find the host-shared structures.
+ *
+ * Reads ``sysinit`` and ``osinit`` at their fixed addresses and takes from
+ * them the addresses of ``sysdata``, ``osdata``, the runtime configuration,
+ * the trace control and both CCBs. Also stores the remap word for the fault
+ * page (used by the TLB refill handler), sets the clocks from the runtime
+ * configuration (or the initial clock) and reports the hardware as healthy.
+ */
 static void shared_init(void)
 {
 	struct sysinit *si = (struct sysinit *)FW_SYSINIT_VA;
@@ -67,6 +89,20 @@ static void shared_init(void)
 	}
 }
 
+/**
+ * Firmware entry point, called by ``boot.S`` once the stack and caches are up.
+ *
+ * Initialises the shared structures, the trace and statistics, powers the
+ * GPU on, initialises the units, the scheduler and the kick state, enables
+ * the host interrupt, reports ``firmware_started`` to the host and unmasks
+ * the three interrupt lines (HW0 timer, HW1 MTS background task, HW2 MTS
+ * interrupt task). It then handles any KCCB command queued before it was
+ * ready and sleeps in ``WAIT`` forever; all later work runs from
+ * :c:func:`irq_dispatch`.
+ *
+ * Boot-stage words 4, 5 and 6 (and the ``0xC0DE000n`` debug register) mark
+ * its progress.
+ */
 void fw_main(void)
 {
 	*boot_data_word(BD_BOOT_STAGE) = 4;
@@ -118,12 +154,35 @@ void fw_main(void)
 		mips_wait();
 }
 
+/**
+ * Tell the MTS that the current task has finished.
+ *
+ * Args:
+ *     v: The task type: 0 for the background task, 2 for the interrupt task.
+ */
 static void mts_task_end(uint32_t v)
 {
 	cr_write32(CR_MTS_TASK_END, v);
 	(void)cr_read32(CR_MTS_TASK_END);
 }
 
+/**
+ * Handle one interrupt, called by the exception vector in ``vectors.S``.
+ *
+ * - **Timer**: re-arms the tick, then (unless powered off) processes the
+ *   KCCB, polls the scheduler events, runs the HWR watchdog and the
+ *   scheduler.
+ * - **MTS background task**: processes the KCCB, polls the events and runs
+ *   the scheduler, then ends the task.
+ * - **MTS interrupt task**: reads and clears the GPU event status, passes the
+ *   events to :c:func:`sched_irq` and ends the task.
+ *
+ * Each source also updates its debug counters.
+ *
+ * Args:
+ *     source: 0 timer, 1 MTS background task, 2 MTS interrupt task; anything
+ *         else counts as spurious.
+ */
 void irq_dispatch(uint32_t source)
 {
 	switch (source) {
@@ -183,6 +242,14 @@ void irq_dispatch(uint32_t source)
 	}
 }
 
+/**
+ * Report an unexpected exception, called by ``vectors.S``.
+ *
+ * The vector has saved ``Cause``, ``EPC`` and ``BadVAddr`` in the boot data
+ * page. Sets ``HWR_FW_FAULT`` and counts the fault in ``sysdata``, writes a
+ * trace entry (``0xDEAD00xx`` with the exception code) and interrupts the
+ * host.
+ */
 void fatal_exception(void)
 {
 	uint32_t cause = *boot_data_word(BD_LAST_CAUSE);

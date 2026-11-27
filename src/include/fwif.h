@@ -1,24 +1,40 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 Thalles Campagnani */
-/*
- * Host <-> firmware shared-memory ABI (subset used by this firmware).
+/**
+ * The host/firmware shared-memory interface: the subset this firmware uses.
  *
- * Layouts follow the public upstream interface (drm/imagination
- * pvr_rogue_fwif*.h); every offset used here is checked with static_assert
- * against the values listed in the public check headers.
+ * Layouts follow the public upstream interface (``drm/imagination``
+ * ``pvr_rogue_fwif*.h``); every offset used here is checked with
+ * ``static_assert`` against the values listed in the public check headers.
+ * Each structure names its public counterpart; fields keep the public names
+ * without their type prefixes.
  */
+/**/
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
 
+/** A firmware (MIPS) address in the ``0xC0xxxxxx`` heap window, as the host writes it. */
 typedef uint32_t fwaddr_t; /* firmware (MIPS) address, 0xC0xxxxxx window */
 
+/** Magic value in the upper half of every KCCB, FWCCB and client CCB command type. */
 #define ROGUE_CMD_MAGIC_DWORD           0x2ABCu
+/**
+ * Build a command type from a command ID.
+ *
+ * Args:
+ *     id: The command ID.
+ *
+ * Returns:
+ *     ``ROGUE_CMD_MAGIC_DWORD << 16 | id``.
+ */
 #define ROGUE_CMD_MAGIC(id)             (((uint32_t)ROGUE_CMD_MAGIC_DWORD << 16) | (id))
+/** Client CCB command type flag: the command is a task for a data master. */
 #define ROGUE_CCB_TYPE_TASK             0x8000u
 
 /* ---------------------------------------------------------------- KCCB --- */
+/** Kernel CCB command IDs (``rogue_fwif_kccb_cmd_type``). */
 enum {
 	KCCB_KICK = 101,
 	KCCB_MMUCACHE = 102,
@@ -49,11 +65,14 @@ enum {
 	KCCB_COUNTER_DUMP = 216,
 };
 
+/** KCCB return slot: the command was executed. */
 #define KCCB_RTN_CMD_EXECUTED   (1u << 0)
+/** KCCB return slot: the resource to clean up is still in use; the host retries. */
 #define KCCB_RTN_CLEANUP_BUSY   (1u << 1)
+/** KCCB return slot: a register poll failed. */
 #define KCCB_RTN_POLL_FAILURE   (1u << 2)
 
-/* FWCCB command IDs */
+/** Firmware CCB command IDs (``rogue_fwif_fwccb_cmd_type``). */
 enum {
 	FWCCB_ZSBUFFER_BACKING = 101,
 	FWCCB_ZSBUFFER_UNBACKING = 102,
@@ -67,7 +86,7 @@ enum {
 	FWCCB_CONTEXT_FW_PF_NOTIFICATION = 112,
 };
 
-/* Client CCB command IDs */
+/** Client CCB command IDs (``rogue_fwif_ccb_cmd_type``, without the flag bits). */
 enum {
 	CCB_CMD_GEOM = 201,
 	CCB_CMD_TQ_3D = 202,
@@ -91,40 +110,58 @@ enum {
 	CCB_CMD_PADDING = 221,
 };
 
-/* Power */
+/** Firmware power states (``rogue_fwif_pow_state``). */
 enum { POW_STATE_OFF = 0, POW_STATE_ON = 1, POW_STATE_FORCED_IDLE = 2, POW_STATE_IDLE = 3 };
+/** KCCB ``POW`` request types. */
 enum { POW_OFF_REQ = 1, POW_FORCED_IDLE_REQ = 2, POW_NUM_UNITS_CHANGE = 3, POW_APM_LATENCY_CHANGE = 4 };
+/** Arguments of a ``POW_FORCED_IDLE_REQ``. */
 enum { POWER_FORCE_IDLE = 1, POWER_CANCEL_FORCED_IDLE = 2, POWER_HOST_TIMEOUT = 3 };
 
-/* Cleanup types */
+/** KCCB ``CLEANUP`` resource types. */
 enum { CLEANUP_FWCOMMONCONTEXT = 1, CLEANUP_HWRTDATA = 2, CLEANUP_FREELIST = 3, CLEANUP_ZSBUFFER = 4 };
 
-/* HWR state flags */
+/** ``sysdata.hwr_state_flags``: the hardware is healthy. */
 #define HWR_HARDWARE_OK         (1u << 0)
+/** ``hwr_state_flags``: a recovery is in progress. */
 #define HWR_RESET_IN_PROGRESS   (1u << 1)
+/** ``hwr_state_flags``: the recovery is for a lockup. */
 #define HWR_GENERAL_LOCKUP      (1u << 3)
+/** ``hwr_state_flags``: the data masters run normally. */
 #define HWR_DM_RUNNING_OK       (1u << 4)
+/** ``hwr_state_flags``: a data master is stalling. */
 #define HWR_DM_STALLING         (1u << 5)
+/** ``hwr_state_flags``: the firmware took a fatal exception. */
 #define HWR_FW_FAULT            (1u << 6)
+/** ``hwr_state_flags``: a GPU restart was requested. */
 #define HWR_RESTART_REQUESTED   (1u << 7)
 
-/* Sync checkpoint values */
+/** Sync checkpoint value: not signalled yet. */
 #define SYNC_CHECKPOINT_ACTIVE   0xAC1u
+/** Sync checkpoint value: signalled. */
 #define SYNC_CHECKPOINT_SIGNALED 0x519u
+/** Sync checkpoint value: errored (satisfies a fence too). */
 #define SYNC_CHECKPOINT_ERRORED  0xEFFu
+/** UFO address bit: the address is a sync checkpoint, not a counter. */
 #define UFO_ADDR_IS_SYNC_CHECKPOINT 1u
 
-/* Data masters */
+/** Data masters (``PVR_FWIF_DM_*``): the index of :c:var:`dms`. */
 enum { DM_GP = 0, DM_TDM = 1, DM_GEOM = 2, DM_FRAG = 3, DM_CDM = 4, DM_GEOM2 = 6, DM_MAX = 7 };
 
 /* ------------------------------------------------------- structures --- */
 
+/** Control block of the Kernel CCB and the Firmware CCB (``rogue_fwif_ccb_ctl``). */
 struct ccb_ctl {                         /* rogue_fwif_ccb_ctl */
+	/** Written by the producer. */
 	volatile uint32_t write_offset;
+	/** Keeps the two offsets in separate cache lines. */
 	uint32_t pad0[31];
+	/** Written by the consumer. */
 	volatile uint32_t read_offset;
+	/** Ring size in commands, minus one. */
 	uint32_t wrap_mask;
+	/** Command size in bytes. */
 	uint32_t cmd_size;
+	/** Padding. */
 	uint32_t pad1;
 };
 static_assert(offsetof(struct ccb_ctl, read_offset) == 128);
@@ -132,10 +169,15 @@ static_assert(offsetof(struct ccb_ctl, wrap_mask) == 132);
 static_assert(offsetof(struct ccb_ctl, cmd_size) == 136);
 static_assert(sizeof(struct ccb_ctl) == 144);
 
+/** Control block of a client CCB (``rogue_fwif_cccb_ctl``); offsets in bytes. */
 struct cccb_ctl {                        /* rogue_fwif_cccb_ctl */
+	/** Written by the host. */
 	volatile uint32_t write_offset;
+	/** The next command the firmware consumes. */
 	volatile uint32_t read_offset;
+	/** The command the context waits on (for the host's debug dump). */
 	volatile uint32_t dep_offset;
+	/** Ring size in bytes, minus one. */
 	uint32_t wrap_mask;
 	uint32_t read_offset2;
 	uint32_t read_offset3;
@@ -143,19 +185,29 @@ struct cccb_ctl {                        /* rogue_fwif_cccb_ctl */
 	uint32_t pad;
 };
 
+/** A KCCB kick (``rogue_fwif_kccb_cmd_kick_data``). */
 struct kick_data {                       /* rogue_fwif_kccb_cmd_kick_data */
+	/** The context whose client CCB has new commands. */
 	fwaddr_t context_fw_addr;
+	/** The client CCB's new write offset. */
 	uint32_t client_woff_update;
+	/** The client CCB's wrap mask. */
 	uint32_t client_wrap_mask_update;
+	/** Number of cleanup control blocks. */
 	uint32_t num_cleanup_ctl;
+	/** Cleanup control blocks of the resources the commands use. */
 	fwaddr_t cleanup_ctl_fw_addr[3];
 	uint32_t work_est_cmd_header_offset;
 };
 static_assert(sizeof(struct kick_data) == 32);
 
+/** A Kernel CCB command (``rogue_fwif_kccb_cmd``, 88 bytes). */
 struct kccb_cmd {                        /* rogue_fwif_kccb_cmd, 0x58 bytes */
+	/** ``ROGUE_CMD_MAGIC(KCCB_*)``. */
 	uint32_t cmd_type;
+	/** Command flags. */
 	uint32_t kccb_flags;
+	/** The command's data, by type. */
 	union {
 		struct kick_data kick;
 		struct { struct kick_data geom, frag; } combined;
@@ -182,13 +234,18 @@ static_assert(offsetof(struct kccb_cmd, data.slcflush.address) == 8 + 16);
 static_assert(offsetof(struct kccb_cmd, data.slcflush.size) == 8 + 24);
 static_assert(sizeof(struct kccb_cmd) == 88);
 
+/** A Firmware CCB command (``rogue_fwif_fwccb_cmd``, 88 bytes). */
 struct fwccb_cmd {                       /* rogue_fwif_fwccb_cmd, 0x58 bytes */
+	/** ``ROGUE_CMD_MAGIC(FWCCB_*)``. */
 	uint32_t cmd_type;
+	/** Command flags. */
 	uint32_t fwccb_flags;
+	/** The command's data. */
 	uint32_t data[20];
 };
 static_assert(sizeof(struct fwccb_cmd) == 88);
 
+/** Per-OS initialisation data (``rogue_fwif_osinit``): the CCBs, the HWR buffer and ``osdata``. */
 struct osinit {                          /* rogue_fwif_osinit, 0x68 bytes */
 	fwaddr_t kernel_ccbctl_fw_addr;
 	fwaddr_t kernel_ccb_fw_addr;
@@ -206,6 +263,11 @@ static_assert(offsetof(struct osinit, fw_os_data_fw_addr) == 36);
 static_assert(offsetof(struct osinit, comp_checks) == 40);
 static_assert(sizeof(struct osinit) == 104);
 
+/**
+ * System initialisation data (``rogue_fwif_sysinit``): the fault page, the
+ * PDS and USC execution bases, the runtime configuration, trace, ``sysdata``
+ * and utilisation buffers, and the ``firmware_started`` handshake.
+ */
 struct sysinit {                         /* rogue_fwif_sysinit, 0x220 bytes */
 	uint64_t fault_phys_addr;
 	uint64_t pds_exec_base;
@@ -256,6 +318,7 @@ static_assert(offsetof(struct sysinit, bvnc_km_feature_flags) == 380);
 static_assert(offsetof(struct sysinit, tfbc_compression_control) == 540);
 static_assert(sizeof(struct sysinit) == 544);
 
+/** Runtime configuration written by the host (``rogue_fwif_runtime_cfg``): clock, dusts. */
 struct runtime_cfg {                     /* rogue_fwif_runtime_cfg */
 	uint32_t active_pm_latency_ms;
 	uint32_t runtime_cfg_flags;
@@ -271,6 +334,7 @@ struct runtime_cfg {                     /* rogue_fwif_runtime_cfg */
 };
 static_assert(sizeof(struct runtime_cfg) == 72);
 
+/** System data the firmware reports (``rogue_fwif_sysdata``): power and HWR state, faults, polls. */
 struct sysdata {                         /* rogue_fwif_sysdata, 0xE28 bytes */
 	volatile uint32_t config_flags;
 	volatile uint32_t config_flags_ext;
@@ -300,6 +364,7 @@ static_assert(offsetof(struct sysdata, hwr_recovery_flags) == 3580);
 static_assert(offsetof(struct sysdata, fw_sys_data_flags) == 3616);
 static_assert(sizeof(struct sysdata) == 3624);
 
+/** Per-OS data the firmware reports (``rogue_fwif_osdata``): interrupt count, KCCB count, power sync. */
 struct osdata {                          /* rogue_fwif_osdata, 0x248 bytes */
 	uint32_t fw_os_config_flags;
 	uint32_t fw_sync_check_mark;
@@ -319,6 +384,7 @@ static_assert(offsetof(struct osdata, kccb_cmds_executed) == 568);
 static_assert(offsetof(struct osdata, power_sync_fw_addr) == 572);
 static_assert(sizeof(struct osdata) == 584);
 
+/** One thread's trace ring (``rogue_fwif_tracebuf_space``). */
 struct tracebuf_space {                  /* rogue_fwif_tracebuf_space, 424 bytes */
 	volatile uint32_t trace_pointer;
 	fwaddr_t trace_buffer_fw_addr;
@@ -327,6 +393,7 @@ struct tracebuf_space {                  /* rogue_fwif_tracebuf_space, 424 bytes
 };
 static_assert(sizeof(struct tracebuf_space) == 424);
 
+/** Trace control (``rogue_fwif_tracebuf``): the enabled log groups and the rings. */
 struct tracebuf {                        /* rogue_fwif_tracebuf, 0x360 bytes */
 	volatile uint32_t log_type;
 	uint32_t pad;
@@ -338,14 +405,25 @@ static_assert(offsetof(struct tracebuf, tb) == 8);
 static_assert(offsetof(struct tracebuf, tracebuf_size_in_dwords) == 856);
 static_assert(sizeof(struct tracebuf) == 864);
 
-/* Config flags (sysdata.config_flags) */
+/** ``sysdata.config_flags``: do not overlap data masters. */
 #define INICFG_DISABLE_DM_OVERLAP (1u << 19)
 
 /* ------------------------------------------------- contexts and cCCB --- */
+/** A firmware list node (``rogue_fwif_dllist_node``); not used by this firmware. */
 struct dllist_node { fwaddr_t p, n; };
 
-struct ufo { fwaddr_t addr; uint32_t value; };
+/** A UFO: a fence or update on a counter or sync checkpoint (``rogue_fwif_ufo``). */
+struct ufo {
+	/** Firmware address, with :c:macro:`UFO_ADDR_IS_SYNC_CHECKPOINT` for a checkpoint. */
+	fwaddr_t addr;
+	/** The value to wait for, write or add. */
+	uint32_t value;
+};
 
+/**
+ * The part common to every firmware context (``rogue_fwif_fwcommoncontext``):
+ * its client CCB, data master, priority, deadline, memory context and PID.
+ */
 struct fwcommoncontext {                 /* rogue_fwif_fwcommoncontext, 0x98 bytes */
 	fwaddr_t ccbctl_fw_addr;
 	fwaddr_t ccb_fw_addr;
@@ -388,6 +466,7 @@ static_assert(offsetof(struct fwcommoncontext, fw_mem_context_fw_addr) == 136);
 static_assert(offsetof(struct fwcommoncontext, pid) == 144);
 static_assert(sizeof(struct fwcommoncontext) == 152);
 
+/** Compute context-switch programs (``rogue_fwif_cdm_registers_cswitch``). */
 struct cdm_registers_cswitch {           /* rogue_fwif_cdm_registers_cswitch */
 	uint64_t cdm_context_pds0;
 	uint64_t cdm_context_pds1;
@@ -398,6 +477,7 @@ struct cdm_registers_cswitch {           /* rogue_fwif_cdm_registers_cswitch */
 	uint64_t cdm_resume_pds0_b;
 };
 
+/** A compute context (``rogue_fwif_fwcomputecontext``). */
 struct fwcomputecontext {                /* rogue_fwif_fwcomputecontext */
 	struct fwcommoncontext cdm_context;
 	struct cdm_registers_cswitch ctxswitch_regs;
@@ -409,8 +489,11 @@ struct fwcomputecontext {                /* rogue_fwif_fwcomputecontext */
 	uint32_t core_mask_b;
 };
 
+/** A GPU memory context (``rogue_fwif_fwmemcontext``). */
 struct fwmemcontext {                    /* rogue_fwif_fwmemcontext, 32 bytes */
+	/** Bus address of the page catalogue. */
 	uint64_t pc_dev_paddr;
+	/** The BIF slot the firmware bound it to. */
 	uint32_t page_cat_base_reg_set;
 	uint32_t breakpoint_addr;
 	uint32_t bp_handler_addr;
@@ -420,17 +503,28 @@ struct fwmemcontext {                    /* rogue_fwif_fwmemcontext, 32 bytes */
 };
 static_assert(sizeof(struct fwmemcontext) == 32);
 
+/** Header of a client CCB command (``rogue_fwif_ccb_cmd_header``); the command follows. */
 struct ccb_cmd_header {                  /* rogue_fwif_ccb_cmd_header, 0x28 bytes */
+	/** ``ROGUE_CMD_MAGIC(CCB_CMD_*)``, with :c:macro:`ROGUE_CCB_TYPE_TASK` for a task. */
 	uint32_t cmd_type;
+	/** Size of the command after the header, in bytes. */
 	uint32_t cmd_size;
+	/** Job reference reported to the host. */
 	uint32_t ext_job_ref;
+	/** Internal job reference. */
 	uint32_t int_job_ref;
+	/** Work estimation data (not used). */
 	uint32_t work_est[6];
 };
 static_assert(sizeof(struct ccb_cmd_header) == 0x28);
 
+/**
+ * Cleanup control block (``rogue_fwif_cleanup_ctl``): a resource may be freed
+ * once ``executed_commands`` reaches ``submitted_commands``.
+ */
 struct cleanup_ctl { volatile uint32_t submitted_commands, executed_commands; };
 
+/** Registers of a compute command (``rogue_fwif_compute_regs``). */
 struct compute_regs {                    /* rogue_fwif_compute_regs, 72 bytes */
 	uint64_t tpu_border_colour_table;
 	uint64_t cdm_cb_queue;
@@ -447,6 +541,7 @@ struct compute_regs {                    /* rogue_fwif_compute_regs, 72 bytes */
 };
 static_assert(sizeof(struct compute_regs) == 72);
 
+/** A compute command (``rogue_fwif_cmd_compute``). */
 struct cmd_compute {                     /* rogue_fwif_cmd_compute, 0x60 bytes */
 	uint32_t frame_num;
 	uint32_t pad;
@@ -459,7 +554,7 @@ struct cmd_compute {                     /* rogue_fwif_cmd_compute, 0x60 bytes *
 static_assert(offsetof(struct cmd_compute, flags) == 80);
 static_assert(sizeof(struct cmd_compute) == 0x60);
 
-/* rogue_fwif_transfer_regs / rogue_fwif_cmd_transfer (TQ_3D payload, 192 bytes) */
+/** Registers of a transfer command (``rogue_fwif_transfer_regs``). */
 struct transfer_regs {
 	uint32_t isp_bgobjvals;
 	uint32_t usc_pixel_output_ctrl;
@@ -489,6 +584,7 @@ static_assert(offsetof(struct transfer_regs, isp_mtile_base) == 96);
 static_assert(offsetof(struct transfer_regs, pbe_wordx_mrty) == 104);
 static_assert(sizeof(struct transfer_regs) == 176);
 
+/** A transfer command, the ``TQ_3D`` payload (``rogue_fwif_cmd_transfer``, 192 bytes). */
 struct cmd_transfer {
 	uint32_t frame_num;
 	uint32_t pad0;
@@ -501,7 +597,7 @@ static_assert(offsetof(struct cmd_transfer, flags) == 184);
 static_assert(sizeof(struct cmd_transfer) == 192);
 
 /* ------------------------------------------------ statistics and HWR log */
-/* rogue_fwif_time_corr (0x28 bytes) */
+/** A time-correlation entry (``rogue_fwif_time_corr``). */
 struct time_corr {
 	uint64_t os_timestamp;
 	uint64_t os_mono_timestamp;
@@ -512,14 +608,20 @@ struct time_corr {
 };
 static_assert(sizeof(struct time_corr) == 0x28);
 
+/** Entries in ``time_corr[]``. */
 #define TIME_CORR_ARRAY_SIZE    256
+/** Fixed-point shift of the timer-to-nanoseconds factor. */
 #define CRDELTA_ACCURACY_SHIFT  20
+/** Utilisation state: idle. */
 #define GPU_UTIL_STATE_IDLE     0u
+/** Utilisation state: work runs or waits. */
 #define GPU_UTIL_STATE_ACTIVE   1u
+/** Utilisation state: work is held back (forced idle). */
 #define GPU_UTIL_STATE_BLOCKED  2u
+/** The state bits of ``last_word``; the rest is the time in ns. */
 #define GPU_UTIL_STATE_MASK     0x3ull
 
-/* rogue_fwif_gpu_util_fwcb */
+/** Utilisation control block (``rogue_fwif_gpu_util_fwcb``). */
 struct gpu_util_fwcb {
 	struct time_corr time_corr[TIME_CORR_ARRAY_SIZE];
 	uint32_t time_corr_seq_count;
@@ -532,10 +634,14 @@ static_assert(offsetof(struct gpu_util_fwcb, last_word) == 0x2808);
 static_assert(offsetof(struct gpu_util_fwcb, stats_counters) == 0x2810);
 
 /* rogue_hwrinfo (136 bytes) with the rogue_bifinfo member of the union */
+/** HWR log type: a data master overran its deadline. */
 #define HWRTYPE_OVERRUN         1u
+/** HWR log type: an MMU fault on BIF bank 0. */
 #define HWRTYPE_BIF0FAULT       3u
+/** Size of the per-DM counters in the HWR buffer (``PVR_FWIF_DM_MAX``). */
 #define FW_DM_MAX               9   /* PVR_FWIF_DM_MAX */
 
+/** An HWR log entry (``rogue_hwrinfo`` with the ``rogue_bifinfo`` union member). */
 struct hwrinfo {
 	uint64_t bif_req_status;
 	uint64_t bif_mmu_status;
@@ -564,10 +670,12 @@ static_assert(offsetof(struct hwrinfo, core_id) == 80);
 static_assert(offsetof(struct hwrinfo, cr_time_of_kick) == 88);
 static_assert(sizeof(struct hwrinfo) == 136);
 
+/** HWR log entries kept forever. */
 #define HWINFO_MAX_FIRST 8
+/** HWR log entries in all; the last 8 form a ring. */
 #define HWINFO_MAX       16
 
-/* rogue_fwif_hwrinfobuf (0x920 bytes) */
+/** The HWR log and per-DM counters (``rogue_fwif_hwrinfobuf``). */
 struct hwrinfobuf {
 	struct hwrinfo hwr_info[HWINFO_MAX];
 	uint32_t hwr_counter;
@@ -584,12 +692,16 @@ static_assert(offsetof(struct hwrinfobuf, hwr_dm_locked_up_count) == 2192);
 static_assert(offsetof(struct hwrinfobuf, hwr_dm_false_detect_count) == 2300);
 static_assert(sizeof(struct hwrinfobuf) == 0x920);
 
-/* FWCCB CONTEXT_RESET_NOTIFICATION (rogue_fwif_fwccb_cmd_context_reset_data) */
+/** FWCCB command ID of a context reset notification. */
 #define FWCCB_CMD_CONTEXT_RESET_NOTIFICATION 105u
+/** Context reset flag: the job hit a page fault. */
 #define CONTEXT_RESET_FLAG_PF                (1u << 0)
+/** Context reset reason: the context locked up (used for page faults). */
 #define CONTEXT_RESET_REASON_GUILTY_LOCKUP     1u
+/** Context reset reason: the context overran its deadline. */
 #define CONTEXT_RESET_REASON_GUILTY_OVERRUNING 3u
 
+/** Data of a context reset notification (``rogue_fwif_fwccb_cmd_context_reset_data``). */
 struct fwccb_context_reset {
 	uint32_t server_common_context_id;
 	uint32_t reset_reason;

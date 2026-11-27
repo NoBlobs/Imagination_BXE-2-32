@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Geometry (TA) kick.
+/**
+ * Geometry (TA) kick and its completion.
  *
- * Sources: docsClean/kick-geometry-ta.md (phases A-G, the Q16b-Q16m answers),
- * docsClean/command-structs.md and data-structures.md (public layouts),
- * the experiments E027-E040 (docs/logRefs/).  The PM side lives in pm.c.
+ * Sources: ``docsClean`` ``kick-geometry-ta.md`` (phases A-G, the answers to
+ * Q16b-Q16m), ``command-structs.md`` and ``data-structures.md`` (public
+ * layouts), and the experiments E027-E040 (``docs/logRefs/``). The parameter
+ * manager side lives in ``pm.c``.
  */
+/**/
 #include "kick.h"
 #include "pm.h"
 
@@ -70,23 +72,51 @@
 #define CR_PM_ALIST_SP           0x0270   /* live, PM context 0 */
 #define CR_PM_MLIST_SP           0x02C0
 
+/**
+ * Read a 64-bit field of a host structure.
+ *
+ * Args:
+ *     p: The structure.
+ *     off: Byte offset of the field.
+ *
+ * Returns:
+ *     The field.
+ */
 static inline uint64_t rd64(const uint8_t *p, uint32_t off)
 {
 	return *(const uint64_t *)(p + off);
 }
 
+/**
+ * Read a 32-bit field of a host structure.
+ *
+ * Args:
+ *     p: The structure.
+ *     off: Byte offset of the field.
+ *
+ * Returns:
+ *     The field.
+ */
 static inline uint32_t rd32(const uint8_t *p, uint32_t off)
 {
 	return *(const uint32_t *)(p + off);
 }
 
-/*
- * B. Load the HWRTData into PM context 0 (kick-geometry-ta.md B, answers to
- * Q16h-Q16j and Q29b): context select, free lists and CONTEXT_PB_BASE, the
- * PM-MMU invalidation, MLIST base and catalogues, VHeap, then on a first kick
- * the TA cache command 0x0258 and the PM reset pulses 0x0290 / 0x0198 (render
- * 2 on the second HWRTData stalls without them). A non-first kick of an
- * HWRTData that another one evicted reloads its saved lists and SPs instead.
+/**
+ * Phase B: load an HWRTData into PM context 0.
+ *
+ * Follows ``kick-geometry-ta.md`` B (answers to Q16h-Q16j and Q29b): the
+ * free lists and ``CONTEXT_PB_BASE``, synchronised with a 3D of another
+ * context (Q38); the PM-MMU invalidation; the MLIST base and the catalogues;
+ * the VHeap table. A first kick then runs the TA cache command ``0x0258`` and
+ * the PM reset pulses ``0x0290`` / ``0x0198`` (render 2 on the second
+ * HWRTData stalls without them). A later kick of an HWRTData that another
+ * one evicted reloads its saved catalogues and stack pointers instead.
+ *
+ * Args:
+ *     hwrt_fw: Firmware address of the HWRTData.
+ *     hwrt: The HWRTData.
+ *     first: This is the first kick of the render.
  */
 static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 {
@@ -131,10 +161,16 @@ static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 		TRACE(SFID_DBG_4, 0xE0410B50u, 0u, 0u);
 }
 
-/*
- * Render-target arrays (kick-compute-and-3d.md "Render-target arrays",
- * answer to Q31). At a first kick after a partial render, the per-layer
- * partial-render counters start again.
+/**
+ * Start the partial-render bookkeeping of a new frame.
+ *
+ * At a first kick after a partial render (``HWRT_FLAGS_PRIOR_PR`` set), the
+ * per-layer partial-render counters are zeroed and the flag is cleared:
+ * the renders of the previous frame's partial renders are done
+ * (``kick-compute-and-3d.md`` "Render-target arrays", answer to Q31).
+ *
+ * Args:
+ *     hwrt: The HWRTData.
  */
 static void geom_rta_pr_reset(uint8_t *hwrt)
 {
@@ -149,14 +185,26 @@ static void geom_rta_pr_reset(uint8_t *hwrt)
 	hw_wr32(hwrt, HWRT_FLAGS, f & ~HWRT_FLAGS_PRIOR_PR);
 }
 
-/*
- * The layers of the render, at the last kick before the TA starts (answer to
- * Q35): the first `active_render_targets` set bits of the RTC bitmap at
- * rtc_dev_addr + 0x200 (bit k = layer k touched by an earlier kick).
- */
+/** Offset of the touched-layer bitmap in the render-target cache. */
 #define RTC_BITMAP_OFF  0x200u
+/** Size of the bitmap in bytes (2048 layers). */
 #define RTC_BITMAP_LEN  0x100u
 
+/**
+ * List the layers of a render-target array render (answer to Q35).
+ *
+ * Called at the last kick, before the TA starts. ``valid_render_targets[]``
+ * receives the first ``active_render_targets`` set bits of the RTC bitmap at
+ * ``rtc_dev_addr + 0x200`` (bit k: layer k was touched by an earlier kick),
+ * read through the GPU MMU. When the bitmap cannot be read, every layer is
+ * listed in order. When fewer bits than the count are set, the count is
+ * lowered. ``current_render_target`` becomes the first listed layer.
+ *
+ * Args:
+ *     hwrt: The HWRTData.
+ *     memctx: Firmware address of the render context's memory context.
+ *     rtc: GPU address of the render-target cache.
+ */
 static void geom_rta_fill(uint8_t *hwrt, fwaddr_t memctx, uint64_t rtc)
 {
 	uint32_t active = rd32(hwrt, HWRT_RTA_ACTIVE);
@@ -200,12 +248,19 @@ static void geom_rta_fill(uint8_t *hwrt, fwaddr_t memctx, uint64_t rtc)
 	TRACE(SFID_MAIN_191, active);
 }
 
-/*
- * OOM before a FRAG_PR (Q31 answer, step 3; layered partial renders, Q39):
- * the layers touched so far, so that the partial render runs the layer loop.
- * The spec reads CR[0x0D20], waits for the TA (paused at the OOM) and zeroes
- * rtc_dev_addr + 0x000..0x1FF before the bitmap scan. The RTC is flushed
- * first so that the bitmap is in memory (our addition).
+/**
+ * List the layers touched so far, when the TA runs out of memory before a
+ * ``FRAG_PR`` (answer to Q31, step 3; layered partial renders, Q39).
+ *
+ * The partial render then runs the layer loop over them. Reads the layer
+ * count from ``CR[0x0D20]``, flushes the RTC so that the bitmap is in memory
+ * (our addition), zeroes ``rtc_dev_addr + 0x000..0x1FF`` and scans the
+ * bitmap with :c:func:`geom_rta_fill`. Does nothing without an RTC or with
+ * fewer than two layers.
+ *
+ * Args:
+ *     hwrt: The HWRTData.
+ *     memctx: Firmware address of the render context's memory context.
  */
 void geom_rta_oom(uint8_t *hwrt, fwaddr_t memctx)
 {
@@ -222,6 +277,35 @@ void geom_rta_oom(uint8_t *hwrt, fwaddr_t memctx)
 	geom_rta_fill(hwrt, memctx, rtc);
 }
 
+/**
+ * Kick a geometry (TA) command.
+ *
+ * The phases of ``kick-geometry-ta.md``:
+ *
+ * - **A.** Bind the memory context to a BIF slot.
+ * - **B.** Load the HWRTData into PM context 0 when it is not there (or on a
+ *   first kick); later kicks run the mid-TA cache command. Arm the SPM.
+ * - **C.** The geometry registers: PPP, TE, PSG region headers, tail
+ *   pointers, screen and macrotile layout, anti-aliasing, the multisample
+ *   control (flipped when asked), the VDM call stack and control stream.
+ * - **D.** The VDM context-state base, the RTC and the render-target array
+ *   state, the TE core selection.
+ * - **E.** On a first kick, enable the geometry context and wait until the
+ *   region headers are initialised.
+ * - **F.** HWRTData state, trace, data-master state.
+ * - **G.** Start the VDM (the last write).
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the render context.
+ *     ctx: The render context.
+ *     hdr: The command header.
+ *     payload: The ``rogue_fwif_cmd_geom`` command.
+ *     cmd_off: Offset of the command in the client CCB.
+ *
+ * Returns:
+ *     ``true`` when the TA runs; ``false`` when the command has no HWRTData,
+ *     common data or local free list (it is retired without running).
+ */
 bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off)
 {
@@ -337,12 +421,21 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	return true;
 }
 
-/*
- * TA finished (kick-geometry-ta.md "TPC flush, VHEAP store, and completion
- * sequence", answers to Q19b and Q29). Runs before the geometry cache flush.
- * Without the TPC flush the tail pointers stay in the TE and every later
- * render on the device stalls (E041). The free lists themselves are stored
- * at the fragment kick (Q19 answer).
+/**
+ * Finish a geometry task (``EV_TA_FINISHED``).
+ *
+ * Follows ``kick-geometry-ta.md`` "TPC flush, VHEAP store, and completion
+ * sequence" (answers to Q19b and Q29) and runs before the geometry cache
+ * flush. A non-last kick stores the VHeap. The TPC is flushed (without it
+ * the tail pointers stay in the TE and every later render on the device
+ * stalls, E041), and the RTC when there is one. The HWRTData then receives
+ * the touched-layer count of a non-last kick, the PM stack pointers and
+ * last catalogue bases (for a reload after eviction) and the
+ * ``GEOM_FINISHED`` state. The free lists themselves are stored at the
+ * fragment kick (Q19 answer).
+ *
+ * Args:
+ *     s: The geometry data master's state.
  */
 void geom_done(struct dm_state *s)
 {

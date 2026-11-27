@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Fragment (3D) kick of a render, and of a partial render (FRAG_PR).
+/**
+ * Fragment (3D) kick of a render and of a partial render (``FRAG_PR``),
+ * the layer loop of render-target arrays, and the render's completion.
  *
- * Sources: docsClean/kick-compute-and-3d.md ("Fragment kick", "Observed during
- * the render", "Input-attachment renders", "Render-target arrays" for the
- * layer loop, Q27), kick-geometry-ta.md phase B step 3
- * and the OOM/PR register changes (Q16m), partial-render-spm.md, the public
- * rogue_fwif_frag_regs layout; experiments E035-E040.
+ * Sources: ``docsClean`` ``kick-compute-and-3d.md`` ("Fragment kick",
+ * "Observed during the render", "Input-attachment renders", "Render-target
+ * arrays" for the layer loop, Q27), ``kick-geometry-ta.md`` phase B step 3
+ * and the OOM/PR register changes (Q16m), ``partial-render-spm.md``, the
+ * public ``rogue_fwif_frag_regs`` layout; experiments E035-E040.
  */
+/**/
 #include "kick.h"
 #include "pm.h"
 
@@ -114,9 +116,14 @@
  * TA finished (active_render_targets, valid_render_targets[]; geom.c, Q31).
  */
 #ifndef EXP_MEM_FREE_US
+/**
+ * How long :c:func:`frag_done` waits for ``PM_3D_MEM_FREE``, in microseconds
+ * (the specification saw 0.4 to 2.5 ms). An experiment knob.
+ */
 #define EXP_MEM_FREE_US          3000     /* the spec saw 0.4-2.5 ms */
 #endif
 
+/* rd64() / rd32(): as in geom.c (documented there). */
 static inline uint64_t rd64(const uint8_t *p, uint32_t off)
 {
 	return *(const uint64_t *)(p + off);
@@ -127,9 +134,14 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
 	return *(const uint32_t *)(p + off);
 }
 
+/** The fragment data master runs a partial render. */
 static bool frag_is_pr;         /* the fragment DM runs a partial render */
 
-/* layer loop of a render-target-array render (kick-compute-and-3d.md, Q27) */
+/**
+ * The layer loop of a render-target-array render (``kick-compute-and-3d.md``,
+ * Q27): the layer count, and the region-header, depth/stencil and PBE bases
+ * with their per-layer strides.
+ */
 static struct {
 	bool on;                /* more than one layer: loop at PIXELBE_END_RENDER */
 	uint32_t active;
@@ -139,10 +151,11 @@ static struct {
 	uint8_t pbe_layered;    /* bit n: MRT n is a TWIDDLE_3D target (zslice add) */
 } rta;
 
-/*
- * The command's fields that depend on has_pr, per layer (partial-render-spm.md
- * "Multi-PR kick state", Q30; layered FRAG_PR, Q39): written on every kick and
- * on every layer of a render-target-array render.
+/**
+ * The command's fields that depend on ``has_pr``, kept for every layer
+ * (``partial-render-spm.md`` "Multi-PR kick state", Q30; layered
+ * ``FRAG_PR``, Q39). They are written at the kick and again on every layer of
+ * a render-target-array render by :c:func:`frag_layer_state`.
  */
 static struct {
 	bool pr;                /* this render is a FRAG_PR */
@@ -152,13 +165,33 @@ static struct {
 	uint64_t zlsctl, bg[3], bg_pr[3];
 } ks;
 
+/** Forget a running partial render and layer loop (after a hardware recovery). */
 void frag_hwr_reset(void)
 {
 	frag_is_pr = false;
 	rta.on = false;
 }
 
-/* ZLS control, background object, ISP_CTL and 0x06D0 for layer `layer`. */
+/**
+ * Write the state that depends on the layer's partial renders.
+ *
+ * ``has_pr`` is true when an earlier partial render of this frame stored the
+ * layer (``HWRT_FLAGS_PRIOR_PR`` and a non-zero per-layer counter):
+ *
+ * - every ``FRAG_PR`` forces the depth/stencil store, and ``0x06D0`` becomes
+ *   ``0x3F`` with depth or stencil;
+ * - with ``has_pr`` the depth/stencil load is forced, the partial-render
+ *   background program ``pds_pr_bgnd`` is used, ``isp_bgobjvals`` gets bit 9,
+ *   and ``ISP_CTL`` bit 17 is cleared unless the flags keep it;
+ * - a first ``FRAG_PR`` whose background differs sets ``ISP_CTL`` bit 17;
+ * - flag ``0x8000`` makes ``0x06D0`` ``0x7F``.
+ *
+ * Writes ZLS control, the background object, ``ISP_CTL`` and ``0x06D0``. A
+ * ``FRAG_PR`` then counts against the layer (Q39).
+ *
+ * Args:
+ *     layer: The render target (layer) index.
+ */
 static void frag_layer_state(uint32_t layer)
 {
 	bool has_pr = ks.prior_pr && (!ks.npr || hw_rd32(ks.npr, 4 * layer) > 0);
@@ -202,7 +235,17 @@ static void frag_layer_state(uint32_t layer)
 		hw_wr32(ks.npr, 4 * layer, hw_rd32(ks.npr, 4 * layer) + 1);
 }
 
-/* Program the per-layer registers for layer `layer` (steps 1-4). */
+/**
+ * Program the per-layer registers of a render-target-array render (steps
+ * 1-4).
+ *
+ * The region-header base, ``RENDER_TGT_ID`` (read by the end-of-tile
+ * program), the z-slice of each 3D-twiddled PBE target, and the depth and
+ * stencil load/store bases.
+ *
+ * Args:
+ *     layer: The render target (layer) index.
+ */
 static void rta_program(uint32_t layer)
 {
 	bcast_write64(CR_ISP_MTILE_BASE, rta.rgn_base + rta.rgn_stride * layer);
@@ -226,10 +269,23 @@ static void rta_program(uint32_t layer)
 	}
 }
 
-/*
- * Set up a render-target-array render (normal or partial): program layer
- * valid_render_targets[0]. rta.on is true when more layers follow. Returns
- * the layer programmed.
+/**
+ * Set up a render-target-array render, normal or partial.
+ *
+ * With one layer (or no array) only ``RENDER_TGT_ID`` is written
+ * (``current_render_target``) and the PM pages are freed at the end. With
+ * several layers the bases and strides are kept in ``rta``, the first layer
+ * of ``valid_render_targets[]`` is programmed, and the PM pages are kept
+ * until the last layer. ``rta.on`` is set when more layers follow.
+ *
+ * Args:
+ *     cmd: The fragment command.
+ *     r: The command's ``rogue_fwif_frag_regs``.
+ *     hwrt: The HWRTData.
+ *     common: The HWRTData's common part.
+ *
+ * Returns:
+ *     The layer programmed.
  */
 static uint32_t rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
 			  const uint8_t *common)
@@ -272,10 +328,20 @@ static uint32_t rta_setup(const uint8_t *cmd, const uint8_t *r, uint8_t *hwrt,
 	return layer;
 }
 
-/*
- * PIXELBE_END_RENDER of a render-target-array render or partial render (step
- * 6, Q39): kick the next layer before the cache flush and the retire (and
- * before PR executed). True if a layer was kicked.
+/**
+ * Move a render-target-array render to its next layer (step 6, Q39).
+ *
+ * Called at ``PIXELBE_END_RENDER``, before the cache flush and the retire
+ * (and, for a partial render, before it is reported executed). Programs the
+ * next layer of ``valid_render_targets[]``, writes its partial-render state
+ * again (Q36, Q39) and launches the pixel pipe. After the last layer the loop
+ * ends; ``active_render_targets`` stays until the next first kick.
+ *
+ * Args:
+ *     s: The fragment data master's state.
+ *
+ * Returns:
+ *     ``true`` if a layer was kicked, ``false`` when the render is complete.
  */
 bool frag_rta_next(struct dm_state *s)
 {
@@ -308,10 +374,18 @@ bool frag_rta_next(struct dm_state *s)
 	return true;
 }
 
-/*
- * Phase B step 3 of a normal render: store the free lists from PM context 0
- * (the state the geometry left), then load them, the geometry's lists and its
- * catalogues into PM context 1.
+/**
+ * Phase B step 3 of a render: give the HWRTData to PM context 1.
+ *
+ * If PM context 0 still holds this HWRTData, its free lists are stored and
+ * it stops being tracked there (the same-HWRTData handoff, Q38). The free
+ * lists are then loaded into context 1, synchronised with a geometry of
+ * another context, followed by the geometry's saved catalogues and stack
+ * pointers.
+ *
+ * Args:
+ *     hwrt_fw: Firmware address of the HWRTData.
+ *     hwrt: The HWRTData.
  */
 static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 {
@@ -347,10 +421,15 @@ static void frag_pm_load(fwaddr_t hwrt_fw, const uint8_t *hwrt)
 		TRACE(SFID_DBG_4, 0xE0410B60u, 0u, 0u);
 }
 
-/*
- * Partial render (Q16m answer): context 1 takes the geometry's *current*
- * catalogues and list stack pointers; the free lists are shared, not
- * reloaded; then PM_PARTIAL_RENDER_ENABLE = 1.
+/**
+ * Load PM context 1 for a partial render (Q16m answer).
+ *
+ * Context 1 takes the geometry's *current* catalogues and list stack
+ * pointers from the live registers; the free lists are shared, not reloaded.
+ * Then ``PM_PARTIAL_RENDER_ENABLE`` is set.
+ *
+ * Args:
+ *     hwrt: The HWRTData.
  */
 static void frag_pm_load_pr(const uint8_t *hwrt)
 {
@@ -363,6 +442,38 @@ static void frag_pm_load_pr(const uint8_t *hwrt)
 	cr_write32(CR_PM_PARTIAL_RENDER_ENABLE, 1);
 }
 
+/**
+ * Kick a fragment command: a render or a partial render.
+ *
+ * The phases of ``kick-compute-and-3d.md`` "Fragment kick":
+ *
+ * - **A.** Single-core control, BIF slot, the PM load (:c:func:`frag_pm_load`
+ *   or :c:func:`frag_pm_load_pr`).
+ * - **B.** ISP configuration: USC output and clears, view index, region
+ *   headers, screen and macrotile layout.
+ * - **C.** The command's partial-render state, scissor and depth-bias bases,
+ *   anti-aliasing and multisample control, depth/stencil bases (the
+ *   command's, in a partial render too: Q30), the occlusion query base
+ *   (Q32), border colours, tiles in flight.
+ * - **D.** Pipe reset, end-of-render PDS program, PBE words, the
+ *   partial-render control ``0x01C0``, the first layer
+ *   (:c:func:`rta_setup`) and its partial-render state.
+ * - **E.** HWRTData state (or the SPM's partial-render start) and trace.
+ * - **F.** Launch the pixel pipe (the last write).
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the render context.
+ *     ctx: The render context.
+ *     hdr: The command header.
+ *     payload: The ``rogue_fwif_cmd_frag`` command.
+ *     cmd_off: Offset of the command in the client CCB.
+ *     partial: This is a ``FRAG_PR`` armed by the SPM.
+ *
+ * Returns:
+ *     ``true`` when the render runs; ``false`` when the command has no
+ *     HWRTData, common data or local free list (it is retired without
+ *     running).
+ */
 bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	       const struct ccb_cmd_header *hdr, const void *payload, uint32_t cmd_off,
 	       bool partial)
@@ -472,10 +583,22 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	return true;
 }
 
-/*
- * Render or partial-render completion. The PM returns the pages by itself
- * and raises PM_3D_MEM_FREE after PIXELBE_END_RENDER (Q16k/Q16l); in a small
- * render both arrive together, so the IRQ task may already have seen it (E038).
+/**
+ * Finish a render or a partial render.
+ *
+ * The PM returns the pages by itself and raises ``PM_3D_MEM_FREE`` after
+ * ``PIXELBE_END_RENDER`` (Q16k/Q16l); in a small render both arrive together,
+ * so the interrupt task may already have seen it (E038). It is awaited for
+ * at most :c:macro:`EXP_MEM_FREE_US`, then the PM MMU is invalidated.
+ *
+ * - A partial render sets ``HWRT_FLAGS_PRIOR_PR`` (the next partial renders
+ *   and the final render load what it stored), tells the SPM, and keeps the
+ *   ``FRAG_PR`` queued for the next one.
+ * - A render stores the free lists from PM context 1 and sets the
+ *   ``FRAG_FINISHED`` state.
+ *
+ * Args:
+ *     s: The fragment data master's state.
  */
 void frag_done(struct dm_state *s)
 {

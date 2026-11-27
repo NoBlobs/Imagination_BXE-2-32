@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * Hardware recovery (docsClean/hardware-recovery.md, "Reset sequence").
+/**
+ * Hardware recovery (``docsClean`` ``hardware-recovery.md``, "Reset
+ * sequence").
  *
- * Triggered by an MMU page fault (IRQ task or poll) or by the watchdog when a
- * DM has been busy for longer than HWR_TIMEOUT_MS.  The GPU units are reset
- * with a SOFT_RESET pulse that leaves the MIPS core and the MTS wrapper alone,
- * re-initialised, and every running command is discarded (its updates still
- * run, so the host is never left waiting).
+ * Triggered by an MMU page fault (interrupt task or poll) or by the watchdog
+ * when a data master has been busy for longer than its deadline. The GPU
+ * units are reset with a ``SOFT_RESET`` pulse that leaves the MIPS core and
+ * the MTS wrapper alone, then re-initialised, and every running command is
+ * discarded (its updates still run, so the host is never left waiting).
  */
+/**/
 #include "kick.h"
 #include "pm.h"
 
+/** ``CR_SOFT_RESET`` low word, first stage: every GPU unit except the MIPS and MTS wrapper. */
 #define SOFT_RESET_HWR_LO           0x13FFFC1Du
+/** ``CR_SOFT_RESET`` high word, first stage. */
 #define SOFT_RESET_HWR_HI           0xFFEFFE00u
+/** Low-word bits added in the second stage. */
 #define SOFT_RESET_HWR_LO2          0x10610000u   /* second stage, ORed in */
+/** High-word bits added in the second stage. */
 #define SOFT_RESET_HWR_HI2          0x00080004u
 
 /* no public names (hardware-recovery.md) */
@@ -26,15 +32,27 @@
 #define CR_TPU_FLUSH                0x1608
 #define CR_PM_PAGE_MANAGEOP         0x02A0
 
-/*
- * Watchdog: the context's max_deadline_ms (the mainline host sets 30 s; its
- * own job timeout is 60 s).  2 s was too short for large dispatches (E020).
+/**
+ * Watchdog deadline when the context gives none, in milliseconds.
+ *
+ * Normally the context's ``max_deadline_ms`` applies (the mainline host sets
+ * 30 s; its own job timeout is 60 s). 2 s was too short for large dispatches
+ * (E020).
  */
 #define HWR_TIMEOUT_DEFAULT_MS      30000
 
+/** Number of recoveries since boot. */
 static uint32_t hwr_counter;
 
-/* ext_job_ref of the command a DM is running (job ref reported to the host) */
+/**
+ * Get the job reference of the command a data master runs.
+ *
+ * Args:
+ *     s: The data master's state.
+ *
+ * Returns:
+ *     The command's ``ext_job_ref`` (reported to the host), or 0.
+ */
 static uint32_t running_job_ref(const struct dm_state *s)
 {
 	struct fwcommoncontext *ctx = fwptr(s->ctx);
@@ -45,6 +63,27 @@ static uint32_t running_job_ref(const struct dm_state *s)
 	return ((struct ccb_cmd_header *)(ccb + s->cmd_off))->ext_job_ref;
 }
 
+/**
+ * Recover the GPU.
+ *
+ * 1. Hold scheduling: report the reset in progress to the host.
+ * 2. Quiesce the BIF, MMU and SLC ("Detailed bus quiesce", answer to Q29b
+ *    item 4).
+ * 3. Disable partial renders.
+ * 4. Two-stage soft reset of the GPU units.
+ * 5. Re-initialise the units, unstall the BIF, clean the TPU and SLC,
+ *    re-program the BIF catalogue, unpause the PM; forget the PM state and
+ *    ask the host to rebuild the free lists of the HWRTData in use.
+ * 6. Discard the running commands (their updates still run).
+ * 7. Write the HWR log entry and send a context-reset notification per lost
+ *    job, then resume scheduling.
+ *
+ * Args:
+ *     reason: ``HWR_REASON_MMU_FAULT`` or ``HWR_REASON_LOCKUP``.
+ *     mmu_status: ``BIF_FAULT_BANK0_MMU_STATUS`` of a page fault, else 0.
+ *     req_status: ``BIF_FAULT_BANK0_REQ_STATUS`` of a page fault, else 0;
+ *         its address field is reported as the fault address.
+ */
 void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 {
 	uint32_t busy = 0;
@@ -197,7 +236,13 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 	sched_run();
 }
 
-/* Called from the timer tick. */
+/**
+ * Detect a data master that runs for too long; called from the timer tick.
+ *
+ * Compares each busy data master's run time with its context's
+ * ``max_deadline_ms`` (or :c:macro:`HWR_TIMEOUT_DEFAULT_MS`) and starts a
+ * lockup recovery for the first one over it.
+ */
 void hwr_watchdog(void)
 {
 	uint64_t now = gpu_timer();

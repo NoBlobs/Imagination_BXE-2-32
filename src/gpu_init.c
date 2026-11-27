@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
+/**
  * GPU bring-up at every power-on of the GPU domain (cold and warm boot),
- * before the first kick: docsClean/boot-gpu-init.md.
+ * before the first kick: ``docsClean`` ``boot-gpu-init.md``.
  *
- *   gpu_power_on()   section C: XPU broadcast, SYS_BUS_SECURE, BIF fault page,
- *                    MTS task-context association; section B: event routing
- *   gpu_units_init() section A: dusts, SLC bypass, reset pulse, PDS/USC exec
- *                    bases, unit defaults, init-done handshakes
- *   dust_power()     section D: power-island request
+ * - :c:func:`gpu_power_on`: section C (XPU broadcast, ``SYS_BUS_SECURE``,
+ *   BIF fault page, MTS task-context association) and section B (event
+ *   routing).
+ * - :c:func:`gpu_units_init`: section A (dusts, SLC bypass, reset pulse,
+ *   PDS/USC execution bases, unit defaults, init-done handshakes).
+ * - :c:func:`dust_power`: section D (power-island request).
  */
+/**/
 #include "fw.h"
 #include "mips.h"
 
@@ -36,14 +38,28 @@
 
 #define INICFG_POW_RASCALDUST   (1u << 4)
 
-/* MTS_DMn_INTERRUPT_ENABLE values (boot-gpu-init.md, section B) */
+/** Events routed to the interrupt task for DM0: page faults, GPIO, USC trigger, bit 19. */
 #define MTS_INT_DM0  (EV_MMU_PAGE_FAULT | EV_GPIO_REQ | EV_USC_TRIGGER | (1u << 19))
+/** Events routed for DM2 (geometry): TA finished, PM out of memory. */
 #define MTS_INT_DM2  (EV_TA_FINISHED | EV_PM_OUT_OF_MEMORY)
+/** Events routed for DM3 (fragment): end of render. */
 #define MTS_INT_DM3  (EV_PIXELBE_END_RENDER)
+/** Events routed for DM4 (compute): compute finished. */
 #define MTS_INT_DM4  (EV_COMPUTE_FINISHED)
 
+/** The last :c:func:`gpu_units_init` succeeded. */
 static bool units_ready;
 
+/**
+ * Open the GPU to the firmware and route its events.
+ *
+ * Broadcasts register writes to every core (one on the K1), opens the
+ * secure bus, points faulting reads at the host's dummy page instead of
+ * stalling the bus, routes the completion events of each data master to the
+ * MTS interrupt task (the host interrupt path ``CR_EVENT_ENABLE`` must stay
+ * 0, E011), and associates the interrupt task with every data master and
+ * the background task with DM0 (KCCB kicks).
+ */
 void gpu_power_on(void)
 {
 	struct sysinit *si = g.sysinit;
@@ -69,6 +85,13 @@ void gpu_power_on(void)
 	cr_write32(CR_MTS_BGCTX_THREAD0_DM_ASSOC, 1);
 }
 
+/**
+ * Get the number of dusts to power.
+ *
+ * Returns:
+ *     ``default_dusts_num_init`` from the runtime configuration, or 1 when
+ *     it is 0 or more than 8.
+ */
 static uint32_t num_dusts(void)
 {
 	uint32_t n = g.runtime_cfg ? g.runtime_cfg->default_dusts_num_init : 0;
@@ -78,7 +101,18 @@ static uint32_t num_dusts(void)
 	return n;
 }
 
-/* Power-island request: on = true powers the dusts up.  Returns success. */
+/**
+ * Request a dust power-island transition.
+ *
+ * Powering up first marks the dusts active. The request is written, then
+ * the firmware waits (10 ms at most) for ``POWER_COMPLETE``.
+ *
+ * Args:
+ *     on: Power the dusts up (``true``) or down.
+ *
+ * Returns:
+ *     ``true`` when the transition completed without ``POWER_ABORT``.
+ */
 bool dust_power(bool on)
 {
 	uint32_t req = on ? 1u : 0u;
@@ -100,6 +134,15 @@ bool dust_power(bool on)
 	return ok;
 }
 
+/**
+ * Initialise the GPU units (``boot-gpu-init.md`` section A).
+ *
+ * Powers the dusts up, configures the SLC bypass, pulses the unit reset, sets
+ * the PDS and USC execution bases, writes the unit defaults before and after
+ * the init-done handshakes, and sets the TPU filter mode and the TPU, PBE,
+ * ISP and TE defaults. Clock gating is left in AUTO, as the host configures
+ * it.
+ */
 void gpu_units_init(void)
 {
 	struct sysinit *si = g.sysinit;
@@ -209,6 +252,13 @@ void gpu_units_init(void)
 	TRACE(SFID_MAIN_69, ok ? (1u << num_dusts()) - 1 : 0);
 }
 
+/**
+ * Check whether the last unit initialisation succeeded.
+ *
+ * Returns:
+ *     ``true`` when the dusts powered up and every init-done handshake
+ *     completed.
+ */
 bool gpu_units_ready(void)
 {
 	return units_ready;

@@ -5,7 +5,7 @@
 Hardware
 ========
 
-Hardware reference for the **PowerVR Rogue BXE-2-32** GPU (BVNC
+Hardware reference for the **Imagination Rogue BXE-2-32** GPU (BVNC
 ``36.29.52.182``) and its integration in the **SpacemiT K1** SoC. These pages
 consolidate the hardware behaviour documented in the clean-room specification
 :dc:`docsClean/ <README>`, the public upstream ``drm/imagination`` / Mesa

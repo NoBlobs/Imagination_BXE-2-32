@@ -1,23 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
- * GPU utilisation statistics, time correlation and the HWR log
- * (docsClean/host-interface.md "Time correlation", data-structures.md,
- * hardware-recovery.md "HWR log"; layouts from the public pvr_rogue_fwif.h).
+/**
+ * GPU utilisation statistics, time correlation, the HWR log and context
+ * reset notifications (``docsClean`` ``host-interface.md`` "Time
+ * correlation", ``data-structures.md``, ``hardware-recovery.md`` "HWR log";
+ * layouts from the public ``pvr_rogue_fwif.h``).
  *
- * Time base.  The mainline host does not write time-correlation entries, so
- * the firmware keeps its own "OS time": nanoseconds derived from ROGUE_CR_TIMER
- * (core clock / 256).  The conversion factor is published in time_corr[] the
- * way the public header defines it: delta_ns = (delta_cr * K) >> 20.
- * ROGUE_CR_TIMER restarts when the GPU domain is powered off; the utilisation
- * accounting never subtracts across such a jump (GPU_UTIL_GET_PERIOD rule).
+ * **Time base.** The mainline host does not write time-correlation entries,
+ * so the firmware keeps its own "OS time": nanoseconds derived from
+ * ``ROGUE_CR_TIMER`` (core clock / 256). The conversion factor is published
+ * in ``time_corr[]`` the way the public header defines it:
+ * ``delta_ns = (delta_cr * K) >> 20``. ``ROGUE_CR_TIMER`` restarts when the
+ * GPU domain is powered off; the utilisation accounting never subtracts
+ * across such a jump (the ``GPU_UTIL_GET_PERIOD`` rule).
  */
+/**/
 #include "kick.h"
 
+/** The host's utilisation control block, or ``NULL``. */
 static struct gpu_util_fwcb *util;
+/** The host's HWR information buffer, or ``NULL``. */
 static struct hwrinfobuf *hwrbuf;
+/** Timer-to-nanoseconds factor: ``(256 * 1e9 << 20) / core clock``. */
 static uint64_t cr_to_ns_k;             /* (256 * 1e9 << 20) / core clock */
 
+/**
+ * Convert GPU timer ticks to nanoseconds.
+ *
+ * The product is split so that it stays inside 64 bits for any 48-bit timer
+ * value.
+ *
+ * Args:
+ *     cr: Timer ticks.
+ *
+ * Returns:
+ *     Nanoseconds.
+ */
 static uint64_t cr_to_ns(uint64_t cr)
 {
 	/* split to keep the product inside 64 bits for any 48-bit timer value */
@@ -26,12 +44,24 @@ static uint64_t cr_to_ns(uint64_t cr)
 	return hi * cr_to_ns_k + ((lo * cr_to_ns_k) >> CRDELTA_ACCURACY_SHIFT);
 }
 
+/**
+ * Get the firmware's "OS time".
+ *
+ * Returns:
+ *     The GPU timer in nanoseconds.
+ */
 uint64_t stats_now_ns(void)
 {
 	return cr_to_ns(gpu_timer());
 }
 
-/* Publish a time-correlation entry for the current clock. */
+/**
+ * Recompute the timer factor and publish a time-correlation entry for the
+ * current clock.
+ *
+ * The entry is written to the next slot of ``time_corr[]`` before the
+ * sequence count is advanced, so that the host never reads a partial entry.
+ */
 void stats_time_corr(void)
 {
 	if (!g.core_clock_hz)
@@ -53,6 +83,12 @@ void stats_time_corr(void)
 	util->time_corr_seq_count = seq;
 }
 
+/**
+ * Find the utilisation and HWR buffers and start the time base.
+ *
+ * The utilisation state word restarts as IDLE at the new time base; the
+ * counters are kept.
+ */
 void stats_init(void)
 {
 	util = fwptr(g.sysinit->gpu_util_fw_cb_ctl_fw_addr);
@@ -64,7 +100,16 @@ void stats_init(void)
 	}
 }
 
-/* Account the time spent in the previous state and switch to `state`. */
+/**
+ * Account the time spent in the previous utilisation state and switch to a
+ * new one.
+ *
+ * Entering IDLE also records ``start_idle_time`` in ``sysdata`` and traces
+ * the idle, active and blocked totals.
+ *
+ * Args:
+ *     state: ``GPU_UTIL_STATE_IDLE``, ``ACTIVE`` or ``BLOCKED``.
+ */
 void stats_set_state(uint32_t state)
 {
 	if (!util)
@@ -97,9 +142,24 @@ void stats_set_state(uint32_t state)
 	}
 }
 
-/*
- * Append one entry to the host-visible HWR log: the first 8 entries are kept
- * forever, the last 8 form a ring (hardware-recovery.md).
+/**
+ * Append one entry to the host-visible HWR log.
+ *
+ * The first 8 entries are kept forever, the last 8 form a ring
+ * (``hardware-recovery.md``). The per-DM overrun, lockup and recovery
+ * counters are updated too.
+ *
+ * Args:
+ *     dm: The data master.
+ *     hwr_type: ``HWRTYPE_*`` value.
+ *     req: BIF request status of a page fault.
+ *     mmu: BIF MMU status of a page fault.
+ *     pc: Page catalogue of the lost job.
+ *     event_status: ``CR_EVENT_STATUS`` at the recovery.
+ *     kick_time: GPU timer at the kick.
+ *     reset_start: GPU timer when the recovery started.
+ *     reset_finish: GPU timer when the reset finished.
+ *     pid: Process ID of the lost job's context.
  */
 void stats_hwr_log(uint32_t dm, uint32_t hwr_type, uint64_t req, uint64_t mmu,
 		   uint64_t pc, uint32_t event_status, uint64_t kick_time,
@@ -142,7 +202,19 @@ void stats_hwr_log(uint32_t dm, uint32_t hwr_type, uint64_t req, uint64_t mmu,
 	write_barrier();
 }
 
-/* Tell the host which context lost a job (FWCCB CONTEXT_RESET_NOTIFICATION). */
+/**
+ * Tell the host which context lost a job
+ * (``FWCCB_CMD_CONTEXT_RESET_NOTIFICATION``).
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the context.
+ *     dm: The data master.
+ *     reason: ``CONTEXT_RESET_REASON_*`` value.
+ *     job_ref: The lost command's job reference.
+ *     pc: Page catalogue of the context.
+ *     page_fault: The job hit a page fault.
+ *     fault_addr: The faulting address, when it did.
+ */
 void stats_notify_context_reset(fwaddr_t ctxaddr, uint32_t dm, uint32_t reason,
 				uint32_t job_ref, uint64_t pc, bool page_fault,
 				uint64_t fault_addr)

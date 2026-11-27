@@ -1,49 +1,90 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Thalles Campagnani
-/*
+/**
  * Client CCB processing and data-master scheduling.
  *
- * Every context the host kicks is remembered in a small table.  A context is
- * "pending" while its cCCB has unread commands.  The scheduler walks pending
- * contexts round-robin and, for each one, consumes commands from read_offset:
- *   - auxiliary commands (fences, updates, priority, padding...) are handled
- *     in place;
- *   - a fence that is not satisfied blocks the context (re-evaluated on the
- *     next scheduling pass: every BG task, IRQ task and timer tick);
- *   - a task is dispatched to its data master if the DM is idle, and stays
- *     at read_offset until the DM signals completion; then it is retired and
- *     the following updates are processed.
+ * Every context the host kicks is remembered in a small table. A context is
+ * "pending" while its client CCB has unread commands. The scheduler walks the
+ * pending contexts round-robin and, for each one, consumes commands from
+ * ``read_offset``:
+ *
+ * - auxiliary commands (fences, updates, priority, padding...) are handled
+ *   in place;
+ * - a fence that is not satisfied blocks the context (it is re-evaluated on
+ *   the next scheduling pass: every background task, interrupt task and
+ *   timer tick);
+ * - a task is dispatched to its data master if the DM is idle, and stays at
+ *   ``read_offset`` until the DM signals completion; then it is retired and
+ *   the following updates are processed.
  */
+/**/
 #include "fw.h"
 #include "kick.h"
 #include "pm.h"
 
+/** Size of the context table. */
 #define MAX_CTX         64
+/** Kicks per context whose cleanup control blocks can wait for retirement. */
 #define CLEANUP_Q       8
+/** Commands one context may consume in a single pass. */
 #define MAX_CMDS_PASS   64
 
+/** One context known to the scheduler. */
 struct ctx_ent {
+	/** Firmware address of the context's ``fwcommoncontext``. */
 	fwaddr_t addr;
+	/** The entry is in use. */
 	bool used;
+	/** The client CCB may have commands to consume. */
 	bool pending;
+	/** The client CCB is unusable (bad command header or missing buffers). */
 	bool dead;
+	/** The context's data master, from ``fwcommoncontext.dm``. */
 	uint8_t dm;
-	/* cleanup control blocks of the kicks not yet retired (FIFO) */
+	/** Cleanup control blocks of the kicks not yet retired (FIFO). */
 	fwaddr_t cleanup[CLEANUP_Q][3];
+	/** Number of cleanup control blocks in each FIFO slot. */
 	uint8_t cleanup_n[CLEANUP_Q];
-	uint8_t cq_head, cq_count;
+	/** FIFO head index. */
+	uint8_t cq_head;
+	/** FIFO length. */
+	uint8_t cq_count;
 };
 
+/** The context table. */
 static struct ctx_ent ctxs[MAX_CTX];
+/** Per data master: the task it runs, if any (see :c:struct:`dm_state`). */
 struct dm_state dms[DM_MAX];
+/** Where the next round-robin pass starts. */
 static uint32_t rr_next;
+/** A UFO was written or a command retired: interrupt the host after the pass. */
 static bool host_notify_needed;
 
+/**
+ * Get a context's ``fwcommoncontext``.
+ *
+ * Args:
+ *     e: The table entry.
+ *
+ * Returns:
+ *     Pointer to the host's context structure.
+ */
 static inline struct fwcommoncontext *ctx_ptr(const struct ctx_ent *e)
 {
 	return fwptr(e->addr);
 }
 
+/**
+ * Look a context up in the table.
+ *
+ * Args:
+ *     addr: Firmware address of the context.
+ *     create: Add the context when it is not in the table.
+ *
+ * Returns:
+ *     The entry, or ``NULL`` when it is not known (and not created, or the
+ *     table is full).
+ */
 static struct ctx_ent *ctx_find(fwaddr_t addr, bool create)
 {
 	struct ctx_ent *free = NULL;
@@ -64,6 +105,16 @@ static struct ctx_ent *ctx_find(fwaddr_t addr, bool create)
 	return free;
 }
 
+/**
+ * Check whether the GPU has work.
+ *
+ * Also traces (``DBG_6``, ``0xE044xxxx``) what keeps the GPU busy whenever
+ * that changes (E043).
+ *
+ * Returns:
+ *     ``true`` when a data master runs a task or a live context has commands
+ *     pending.
+ */
 static bool any_busy(void)
 {
 	static uint32_t last_why = ~0u;
@@ -94,6 +145,13 @@ static bool any_busy(void)
 	return why != 0;
 }
 
+/**
+ * Update the utilisation state and the power state after a pass.
+ *
+ * The utilisation is ACTIVE while work runs or waits, IDLE otherwise, and
+ * BLOCKED while forced idle holds work back. The power state follows (ON or
+ * IDLE) unless the firmware is forced idle or powered off.
+ */
 static void update_pow_state(void)
 {
 	bool busy = any_busy();
@@ -110,6 +168,10 @@ static void update_pow_state(void)
 	pow_set_state(busy ? POW_STATE_ON : POW_STATE_IDLE);
 }
 
+/**
+ * Reset the scheduler: forget every context and data-master task, reset the
+ * kick state and report the GPU idle.
+ */
 void sched_init(void)
 {
 	memset(ctxs, 0, sizeof(ctxs));
@@ -120,6 +182,20 @@ void sched_init(void)
 }
 
 /* -------------------------------------------------------------- UFOs */
+/**
+ * Check whether a fence UFO is satisfied.
+ *
+ * A sync checkpoint is satisfied once it is signalled or errored. A plain
+ * UFO must equal its value, or, for partial-render fences, be at least its
+ * value (signed comparison, so that the counter may wrap).
+ *
+ * Args:
+ *     u: The UFO.
+ *     signed_ge: Compare with ``>=`` instead of ``==``.
+ *
+ * Returns:
+ *     ``true`` when satisfied (or when its address is null).
+ */
 static bool ufo_satisfied(const struct ufo *u, bool signed_ge)
 {
 	volatile uint32_t *p = fwptr(u->addr & ~UFO_ADDR_IS_SYNC_CHECKPOINT);
@@ -136,6 +212,16 @@ static bool ufo_satisfied(const struct ufo *u, bool signed_ge)
 	return *p == u->value;
 }
 
+/**
+ * Perform an update UFO.
+ *
+ * A sync checkpoint is marked signalled; a plain UFO is set to its value, or
+ * incremented by it.
+ *
+ * Args:
+ *     u: The UFO.
+ *     rmw: Add the value instead of writing it.
+ */
 static void ufo_update(const struct ufo *u, bool rmw)
 {
 	volatile uint32_t *p = fwptr(u->addr & ~UFO_ADDR_IS_SYNC_CHECKPOINT);
@@ -150,14 +236,32 @@ static void ufo_update(const struct ufo *u, bool rmw)
 		*p = u->value;
 }
 
-/* SPM: signal a fence UFO from the firmware (partial-render fence). */
+/**
+ * Signal a UFO from the firmware.
+ *
+ * Used by the SPM code to release the partial-render fence. The host is
+ * interrupted after the scheduling pass.
+ *
+ * Args:
+ *     u: The UFO to write.
+ */
 void sched_ufo_signal(const struct ufo *u)
 {
 	ufo_update(u, false);
 	host_notify_needed = true;
 }
 
-/* Did a FENCE_PR pass only through the SPM failing-UFO check? */
+/**
+ * Check whether a ``FENCE_PR`` passed only through the SPM check.
+ *
+ * Args:
+ *     u: The fence's UFOs.
+ *     cnt: Number of UFOs.
+ *
+ * Returns:
+ *     ``true`` when one of the UFOs is not satisfied by its own value, so the
+ *     fence only passed because a partial render is armed.
+ */
 static bool pr_fence_blocked(const struct ufo *u, uint32_t cnt)
 {
 	for (uint32_t i = 0; i < cnt; i++)
@@ -166,7 +270,22 @@ static bool pr_fence_blocked(const struct ufo *u, uint32_t cnt)
 	return false;
 }
 
-/* Kick the FRAG_PR at offset off as a partial render; the queue does not move. */
+/**
+ * Kick the ``FRAG_PR`` that follows a partial-render fence.
+ *
+ * The fence is not consumed: the partial render runs while the queue stays
+ * where it is.
+ *
+ * Args:
+ *     e: The context's table entry.
+ *     ctx: The context.
+ *     ccb: The client CCB.
+ *     off: Offset of the command after the fence.
+ *
+ * Returns:
+ *     ``true`` when the partial render was kicked; ``false`` when the command
+ *     is not a ``FRAG_PR`` or the fragment DM is busy.
+ */
 static bool run_partial_render(struct ctx_ent *e, struct fwcommoncontext *ctx, uint8_t *ccb,
 			       uint32_t off)
 {
@@ -178,6 +297,16 @@ static bool run_partial_render(struct ctx_ent *e, struct fwcommoncontext *ctx, u
 }
 
 /* --------------------------------------------------------- cCCB walk */
+/**
+ * Choose the data master for a task command.
+ *
+ * Args:
+ *     id: The command type (``CCB_CMD_*``, without the flag bits).
+ *     ctx_dm: The context's data master, used for any other command.
+ *
+ * Returns:
+ *     A ``DM_*`` index.
+ */
 static uint32_t task_dm(uint32_t id, uint32_t ctx_dm)
 {
 	switch (id) {
@@ -197,6 +326,15 @@ static uint32_t task_dm(uint32_t id, uint32_t ctx_dm)
 	}
 }
 
+/**
+ * Retire the oldest kick's cleanup control blocks.
+ *
+ * Increments ``executed_commands`` in each of them, which tells the host that
+ * the resources the kick used may be freed.
+ *
+ * Args:
+ *     e: The context's table entry.
+ */
 static void cleanup_ctl_done(struct ctx_ent *e)
 {
 	if (!e->cq_count)
@@ -213,9 +351,20 @@ static void cleanup_ctl_done(struct ctx_ent *e)
 	e->cq_count--;
 }
 
-/*
- * Consume commands of one context. Returns true if the context made
- * progress (anything retired or dispatched).
+/**
+ * Consume the commands of one context.
+ *
+ * At most :c:macro:`MAX_CMDS_PASS` commands are taken per call. Stops at an
+ * unsatisfied fence, at a task whose data master is busy, while one of the
+ * context's own tasks runs, or when the CCB is empty. A command without the
+ * magic word marks the context dead.
+ *
+ * Args:
+ *     e: The context's table entry.
+ *
+ * Returns:
+ *     ``true`` if the context made progress (anything retired or
+ *     dispatched).
  */
 static bool ctx_process(struct ctx_ent *e)
 {
@@ -339,6 +488,13 @@ static bool ctx_process(struct ctx_ent *e)
 	return progress;
 }
 
+/**
+ * Run the scheduler.
+ *
+ * Walks the pending contexts round-robin, repeating while any of them makes
+ * progress (at most 8 passes), then updates the power state and interrupts
+ * the host if anything changed for it.
+ */
 void sched_run(void)
 {
 	bool progress;
@@ -364,7 +520,16 @@ void sched_run(void)
 	}
 }
 
-/* Called by the kick code when a DM finished its task. */
+/**
+ * Retire a data master's task, called by the kick code when it finishes.
+ *
+ * Moves the context's read offset past the task command and retires its
+ * cleanup control blocks. After a partial render (``keep`` set) the
+ * ``FRAG_PR`` stays at the head of the queue for the next one.
+ *
+ * Args:
+ *     dm: The data master (``DM_*``).
+ */
 void sched_dm_done(uint32_t dm)
 {
 	struct dm_state *s = &dms[dm];
@@ -392,12 +557,31 @@ void sched_dm_done(uint32_t dm)
 	host_notify_needed = true;
 }
 
+/**
+ * Handle GPU events from the MTS interrupt task.
+ *
+ * Args:
+ *     events: The ``CR_EVENT_STATUS`` bits that were set.
+ */
 void sched_irq(uint32_t events)
 {
 	kick_events(events);
 	sched_run();
 }
 
+/**
+ * Handle a KCCB kick: the host wrote new commands to a client CCB.
+ *
+ * Adds the context to the table if needed, queues the kick's cleanup control
+ * blocks (counting them as submitted), takes the new write offset and wrap
+ * mask, and runs the scheduler.
+ *
+ * Args:
+ *     kick: The kick command.
+ *
+ * Returns:
+ *     Extra return-slot flags; always 0.
+ */
 uint32_t sched_kick(const struct kick_data *kick)
 {
 	struct ctx_ent *e = ctx_find(kick->context_fw_addr, true);
@@ -436,6 +620,16 @@ uint32_t sched_kick(const struct kick_data *kick)
 	return 0;
 }
 
+/**
+ * Handle a KCCB ``FORCE_UPDATE``: unblock a context stuck on a fence.
+ *
+ * Sync checkpoints of the fence at ``fence_offset`` that are still active
+ * are marked errored, then the context is scheduled again.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the context.
+ *     fence_offset: Offset of the fence in the client CCB.
+ */
 void sched_force_update(fwaddr_t ctxaddr, uint32_t fence_offset)
 {
 	struct ctx_ent *e = ctx_find(ctxaddr, false);
@@ -463,6 +657,20 @@ void sched_force_update(fwaddr_t ctxaddr, uint32_t fence_offset)
 	sched_run();
 }
 
+/**
+ * Handle a KCCB ``CLEANUP`` request.
+ *
+ * A context may be freed when none of its tasks runs and its CCB is empty
+ * (or dead); it is then removed from the table. HWRTData, free lists and
+ * ZS buffers are checked by :c:func:`kick_resource_busy`.
+ *
+ * Args:
+ *     type: ``CLEANUP_*`` resource type.
+ *     addr: Firmware address of the resource.
+ *
+ * Returns:
+ *     ``KCCB_RTN_CLEANUP_BUSY`` when the resource is still in use, else 0.
+ */
 uint32_t sched_cleanup(uint32_t type, fwaddr_t addr)
 {
 	addr &= FW_VA_MASK;
