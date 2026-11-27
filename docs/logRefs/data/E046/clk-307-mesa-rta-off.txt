@@ -1,0 +1,46 @@
+# 307 mesa-rta-off 2026-11-27T13:00:34+00:00
+             gpu_clk                 0       0        0        307200000   0          0     50000      N               cac00000.gpu                    core                     
+[ 4740.954780] powervr cac00000.gpu: [drm] FW version v1.1 (build 6976702 OS)
+FAIL    multiframe       227.6 ms  frame 1: 65536 of 65536 pixels wrong
+FAIL    pre-ta           285.3 ms  frame 0: 262144 of 262144 pixels wrong
+FAIL    bigpb           1787.4 ms  frame 0: 1048576 of 1048576 pixels wrong
+FAIL    input-attach     179.7 ms  frame 1 subpass 0 colour: 4096 of 4096 pixels wrong
+PASS    rta              365.8 ms  64x64 x 6: colour + D32, draw, clears (no gl_Layer), 2 frames; layers 1+5 only; stencil D24S8; 3D image as 2D array
+FAIL    zs-load          186.5 ms  frame 0 pass 2 (loaded depth): 4096 of 4096 pixels wrong
+PASS    msaa             206.8 ms  64x64 2x/4x, resolve attachment + depth resolve, diagonal edge (standard sample positions), 2 frames
+FAIL    mrt              199.7 ms  frame 1 attachment 0: 6144 of 6144 pixels wrong
+FAIL    sizes            184.8 ms  33x17: 561 of 561 pixels wrong
+FAIL    vertex           193.0 ms  frame 0 points: 16384 of 16384 pixels wrong
+FAIL    indirect         211.5 ms  frame 1 indirect draws: 13056 of 16384 pixels wrong
+PASS    queries          213.7 ms  occlusion precise (960 / 0 / 0, host + GPU copy), timestamps not supported; 2 frames
+FAIL    formats          194.1 ms  frame 0 R8G8B8A8_SRGB: 1536 of 1536 pixels wrong
+FAIL    secondary        170.2 ms  frame 1: 4096 of 4096 pixels wrong
+FAIL    multiview        181.8 ms  frame 1 view 0: 4096 of 4096 pixels wrong
+FAIL    raster           177.2 ms  strip + primitive restart: 1152 of 4096 pixels wrong
+FAIL    load-store-none     171.8 ms  drawn attachment: 2048 of 4096 pixels wrong
+SKIP    local-read       146.7 ms  needs dynamicRenderingLocalRead (Vulkan 1.4 or VK_KHR_dynamic_rendering_local_read)
+FAIL    vertex-ext       187.8 ms  divisor 4: 16320 of 16384 pixels wrong
+PASS    pre-cdm          160.0 ms  64 groups x 64, 16 LCG iterations, 4 dispatches
+PASS    resources        194.8 ms  UBO, dyn SSBO (+256), storage img, texel bufs, buf+img atomics, shared mem, frag img, push desc
+PASS    compute-dims     190.5 ms  3D dispatchBase (1,1,1)+(2,3,2), max workgroup 128 reduction x 4
+PASS    subgroups        154.6 ms  subgroupSize=32, elect + ballot + subgroupAdd across 256 invocations
+PASS    xfer             633.2 ms  137x91 + 256x256: upload, offset copy, mirrored blit, MSAA resolve; 2 rounds
+PASS    buffers          165.0 ms  fillBuffer, updateBuffer, copyBuffer (6 regions incl. odd/1B), 8192 bytes
+PASS    ds-copy          158.3 ms  D32_SFLOAT clear + round-trip copy (64x64) + stencil clear/copy
+PASS    blit-mips        175.0 ms  LINEAR blits (64->128, 64->32) + 7-level mip chain
+PASS    image-copy       184.2 ms  3D sub-volume (16x16x8), 2D array (4 layers), R32_UINT->RGBA8 copy
+FAIL    texture          163.1 ms  frame 0 nearest repeat: 4096 of 4096 pixels wrong
+PASS    texture2         275.4 ms  cube+arr, 3D, array, shadow, gather, int/float, unnorm, ETC2, aniso
+PASS    sync             623.9 ms  binary sem (2 queues), timeline sem, events, 500 small submits, sync_file fence
+PASS    sync2            162.0 ms  vkQueueSubmit2 + semaphore, vkCmdPipelineBarrier2 (KHR), 4 rounds
+PASS    memory           413.2 ms  64.0 MiB alloc, 256 small allocs, 200 map/unmap cycles
+SKIP    sparse           144.8 ms  sparse buffer residency not supported
+PASS    robust           279.4 ms  OOB read[1000000] -> 0x1000, OOB write discarded, no fault
+FAIL    idle-resume      174.0 ms  frame 1: 4096 of 4096 pixels wrong
+FAIL    stress          1107.7 ms  concurrent multiframe: FAIL frame 1: 65536 of 65536 pixels wrong
+FAIL    soak             228.5 ms  multiframe (after 2 frames): frame 1: 65536 of 65536 pixels wrong
+FAIL    churn            303.4 ms  device 1 of 20: frame 1: 4096 of 4096 pixels wrong
+FAIL    prio-3d          727.0 ms  calibration: 65536 of 65536 pixels wrong
+FAIL    prio-ta          607.9 ms  calibration: 65472 of 65536 pixels wrong
+PASS    prio-cdm        3642.6 ms  CDM: low job 2.54 s (n=55998); probe alone 1.7 ms, during: avg 148.1 worst 1445.7 ms; probes delayed (no preemption), low job ended first
+# dmesg:

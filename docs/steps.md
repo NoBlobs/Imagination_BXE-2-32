@@ -26,8 +26,8 @@ that comparison:
    no timestamps without `timestampValidBits`. The test passes with exact counts.
 2. **`indirect` frame 1 and `vertex-ext` `divisor 4`**: renders after the first on a device
    that pass with the reference and fail with ours.
-   - Do: first check the GPU clock in our DTB (the reference uses 819.2 MHz; 1 GHz gives
-     intermittent errors). Then compare the second render of these two tests with the
+   - Clock checked (E046): 819.2 MHz gives the same results as 307.2 MHz, so the clock is not
+     the cause; 1 GHz corrupts data now and then. Do: compare the second render of these two tests with the
      `multiframe` frame 1 (which fails on both) to find what our firmware does differently.
    - Done when: both pass. Then the 18-test baseline of `docsClean` section 4 holds.
 3. **Keep the other 18 failures clean**: they fail the same way with the reference

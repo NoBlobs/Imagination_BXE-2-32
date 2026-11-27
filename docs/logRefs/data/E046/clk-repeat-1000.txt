@@ -1,0 +1,4 @@
+1000 xfer: 9 pass / 1 fail
+1000 image-copy: 9 pass / 1 fail
+1000 rta: 10 pass / 0 fail
+1000 queries: 10 pass / 0 fail
