@@ -154,3 +154,73 @@ The same vkfwtest, with the RTA-enabled Mesa (`~/mesa-rta`), each run 3 times:
   - Mesa's load-op program reads `RENDER_TGT_ID` to pick the layer (`rta_load_clear`), the same
     value the end-of-tile program uses correctly. Opened as **Q37**, which also asks for the
     manufacturer firmware run with the current vkfwtest.
+
+## Against the manufacturer firmware with the same vkfwtest (baselines `9d74761`)
+
+vkfwtest `9d74761` adds two baselines:
+- **The setup:** the manufacturer open firmware v1.1 (build `6976702 OS`), the same modified
+  Mesa `5d2dc45` with RTA off and on, and vkfwtest `8932a2f`, which has the read-back barrier.
+- **RTA off:** 41 pass, 7 fail (the six `second-*` and `suspend-after`), 2 skip.
+- **RTA on:** 40 pass, 8 fail (adds `rta`, subset layer 5), 2 skip.
+
+**Our firmware** (`f45474ed…`, `build 1 OS` checked in dmesg before the runs):
+
+| Mesa | vs baseline | Differences |
+|---|---|---|
+| RTA off | **49 same, 1 better, 0 worse** | `suspend-after` passes on ours, failed in the baseline |
+| RTA on | 47 same, 1 better, 2 worse | `bigpb-layers` (frame 1 layer 0, 835584 of 1048576 pixels), `stress` (frame 7); a context reset (`Guilty lockup`, page fault at 0) in dmesg |
+
+**Run-to-run variation, not a firmware difference.**
+- A rerun of the **manufacturer firmware** on the same board (made by mistake, while its build
+  was still loaded) gave the same `bigpb-layers` failure: frame 1, layer 0, 835584 pixels.
+- It also gave a `stress` failure (frame 10 with RTA on, frame 12 with RTA off), `Guilty
+  lockup` / `Guilty overrunning` resets, and `suspend-after` passing.
+- So with RTA on, `bigpb-layers` and `stress` fail on some runs with **both** firmwares, and
+  `suspend-after` passes on some runs with the manufacturer firmware.
+
+**Q37 answered by the data.** The manufacturer firmware fails `rta` step 3 the same way: layer 5
+outside the rect holds layer 0's contents, 3072 of 4096 pixels. Both firmwares behave alike, so
+the background load is most likely on the Mesa side.
+
+**Conclusion.** On the whole current vkfwtest battery, our firmware gives the manufacturer
+firmware's results with RTA off and with RTA on. The differences seen are run-to-run variation
+that both firmwares show, plus `suspend-after`, where ours was better in these runs.
+
+## The two differences with RTA on
+
+### `bigpb-layers` with RTA on: Mesa's partial render supports layer 0 only
+
+With RTA on, `bigpb-layers` is not flaky. It **fails 4/4**, always in frame 1, layer 0
+(835584 of 1048576 pixels), with three `Guilty lockup` resets (page fault, address 0). With RTA
+off it passes 4/4.
+
+What the trace shows:
+- **Frame 0** (HWRTData `0xc00bd000`): every OOM is resolved by growing the free list. The
+  layer loop renders 4 layers. The frame passes.
+- **Frame 1** (HWRTData `0xc00c0000`): the first OOM cannot grow any more. A partial render
+  follows (`Kick 3D ... Partial render:1`), and at once `BIF0 page fault detected` (MMU status
+  `0x1041`, request `0x0002b100…`), HWR, `Discarded cmd` on DM2 and DM3. The final 3D faults
+  too (`0xd101`).
+
+Plain `bigpb` (partial renders, one layer) passes with RTA on. So it is **partial render x
+render-target array**.
+
+**Cause, Mesa:** public Mesa's partial-render scratch setup (`pvr_arch_spm.c`,
+`pvr_spm_setup_texture_state_words`) says "we only support writing to layer 0" and ignores the
+framebuffer's layer count. The manufacturer firmware fails the same way: same frame, same
+pixel count, same reset. Our missing `FRAG_PR` layer loop (E045) cannot be tested until Mesa
+supports layered partial renders.
+
+### `stress`: intermittent with both firmwares, not RTA
+
+| Mesa | Runs | Failures | dmesg |
+|---|---|---|---|
+| RTA on | 3 | 1 (frame 3) | 1 `Guilty lockup`, 3 `Guilty overrunning` |
+| RTA off | 3 | 2 (frames 5, 7) | 1 `Guilty lockup`, 2 `Guilty overrunning` |
+
+- In the firmware trace, the failing runs show a DM3 lockup (`Lockup detected on DM3`) and a
+  BIF0 page fault (`0x9041`, request `0x0000ed0000001180`) while 4 contexts run at once.
+- The rerun of the manufacturer firmware failed `stress` too, with RTA off and on, with the
+  same kinds of resets. Its baseline is a run where it passed.
+- The cause is open. It is shared by both firmwares, so most likely it is not a gap of ours.
+  Asked as **Q38**.

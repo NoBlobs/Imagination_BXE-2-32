@@ -28,7 +28,26 @@ names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core b
 > **Q16b–Q16d** below. Q19 (full geometry flush), Q20, Q21 (ZLS, the remaining
 > `frag_regs`), Q23 and Q24 are still fully open.
 
-#### Q37 — Render-target array with load op LOAD: the background load reads layer 0
+#### Q38 — `vkfwtest stress`: intermittent lockups with four contexts (both firmwares)
+
+[E047](logRefs/E047-vkfwtest-investigation-tests.md). `stress` runs `multiframe`, `pre-ta`,
+`pre-cdm` and `xfer` on four devices at once.
+- **With our firmware** it fails about half the time: 3 of 6 runs, with Mesa RTA off and on.
+- **The failing runs** show `Guilty overrunning` and `Guilty lockup` resets. The firmware
+  trace shows `Lockup detected on DM3` and a BIF0 page fault (MMU status `0x9041`, request
+  `0x0000ed0000001180`), and a later frame of one device reads wrong pixels.
+- **Our rerun of the manufacturer firmware** failed `stress` too, with RTA off and on. The
+  `9d74761` baselines record a passing run.
+1. How often does `stress` fail on the manufacturer firmware (for example 10 runs of
+   `vkfwtest -k stress`)?
+2. In a failing run, which job locks up, and what does the manufacturer firmware's trace show
+   around the first `Guilty overrunning`: which DM, which context, what was running on the
+   other DMs?
+3. Does the manufacturer firmware do anything when several contexts have work queued at once
+   that our scheduler does not: preemption, context-switch requests, or ordering between DM 2
+   and DM 3 of different contexts?
+
+#### Q37 — Render-target array with load op LOAD: the background load reads layer 0 (answered by data, vkfwtest baselines `9d74761`: the manufacturer firmware fails step 3 the same way; E047)
 
 [E047](logRefs/E047-vkfwtest-investigation-tests.md). Most vkfwtest failures, including the
 step-3 failure of Q36 and the `msaa` failure of Q34, were a Mesa synchronisation bug. Mesa

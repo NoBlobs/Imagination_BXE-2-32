@@ -27,9 +27,11 @@ manufacturer firmware failed the same 19 tests for the same reason.
    no timestamps without `timestampValidBits`. The test passes with exact counts.
 2. **`indirect`, `vertex-ext` and the "frame 1" family: done.** They were the Mesa bug (E047),
    not firmware. All pass now. The clock does not matter either (E046).
-3. **Compare firmwares again:** ask the dirty team to run the current vkfwtest on the
-   manufacturer firmware. Its baseline was taken without the read-back barrier, so it hides
-   the differences that are left.
+3. **Compare firmwares again: done (E047, baselines `9d74761`).** With the current vkfwtest
+   our firmware gives the manufacturer's results: RTA off 49 same / 1 better / 0 worse. With
+   RTA on, `bigpb-layers` fails on every run with both firmwares: Mesa's partial render
+   supports layer 0 only. `stress` is intermittent with both firmwares and both Mesa builds
+   (Q38).
 4. **Stage E without `VK_ERROR_DEVICE_LOST`**: the reference and the vendor stack do not
    return it either, so phase 5 needs only a clean recovery (which holds) until Mesa changes.
 5. **Render-target arrays (E045): done on the firmware side for normal renders.** Same result as
