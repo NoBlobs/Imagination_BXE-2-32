@@ -33,8 +33,8 @@ manufacturer firmware failed the same 19 tests for the same reason.
 4. **Compare firmwares again: done (E047, baselines `9d74761`).** With the current vkfwtest
    our firmware gives the manufacturer's results: RTA off 49 same / 1 better / 0 worse. With
    RTA on, `bigpb-layers` fails on every run with both firmwares: Mesa's partial render
-   supports layer 0 only. `stress` is intermittent with both firmwares and both Mesa builds
-   (Q38).
+   supports layer 0 only. `stress` was intermittent (Q38); the last failures with our
+   firmware were a PM-sync bug, fixed in E050 (`stress` 400/400).
 5. **Stage E without `VK_ERROR_DEVICE_LOST`**: the reference and the vendor stack do not
    return it either, so phase 5 needs only a clean recovery (which holds) until Mesa changes.
 6. **Render-target arrays (E045): done on the firmware side for normal renders.** Same result as

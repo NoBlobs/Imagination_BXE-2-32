@@ -18,7 +18,6 @@
  */
 #include "layout.h"
 #include "regs.h"
-#include "cp0asm.h"
 
 	.set	micromips
 	.set	noreorder
@@ -31,6 +30,7 @@
  */
 	.globl	_exc_base
 _exc_base:
+	.insn				/* the label marks microMIPS code */
 	.org	0x000
 	b	refill_main
 	nop
@@ -99,7 +99,7 @@ refill_main:
 	li	$1, FW_REGS_VA
 	sw	$8, CR_DBG_REFILLS($1)
 
-	MFC0	26, 8, 0			/* BadVAddr */
+	mfc0	$26, $8, 0			/* BadVAddr */
 	sw	$26, CR_DBG_LASTVA($1)
 	li	$8, ~0x1FFF
 	and	$26, $26, $8		/* VA of the even page */
@@ -145,7 +145,7 @@ refill_main:
 	lw	$13, BD_FAULT_COUNT($27)
 	addiu	$13, $13, 1
 	sw	$13, BD_FAULT_COUNT($27)
-	MFC0	13, 8, 0
+	mfc0	$13, $8, 0
 	sw	$13, BD_LAST_BADVADDR($27)
 	b	6f
 	nop
@@ -184,11 +184,11 @@ refill_main:
 	srl	$12, $26, 12
 	sll	$12, $12, 6
 	ori	$12, $12, (2 << 3) | 7
-	MTC0	12, 2, 0
+	mtc0	$12, $2, 0
 	addiu	$12, $12, (1 << 6)
-	MTC0	12, 3, 0
-	MTC0	0, 5, 0
-	MTC0	8, 0, 0
+	mtc0	$12, $3, 0
+	mtc0	$0, $5, 0
+	mtc0	$8, $0, 0
 	ehb
 	tlbwi
 	ehb
@@ -214,11 +214,11 @@ refill_main:
 general_main:
 	lui	$27, 0xBFC0
 	ori	$27, $27, 0x1000
-	MFC0	26, 13, 0
+	mfc0	$26, $13, 0
 	sw	$26, BD_LAST_CAUSE($27)
-	MFC0	26, 14, 0
+	mfc0	$26, $14, 0
 	sw	$26, BD_LAST_EPC($27)
-	MFC0	26, 8, 0
+	mfc0	$26, $8, 0
 	sw	$26, BD_LAST_BADVADDR($27)
 	li	$1, FW_REGS_VA
 	sw	$26, CR_DBG_EXC_BADVA($1)
@@ -234,10 +234,10 @@ general_main:
 	sw	$29, (BD_EXC_REGS + 29 * 4)($27)
 	sw	$31, (BD_EXC_REGS + 31 * 4)($27)
 	li	$29, FW_STACK_VA + FWL_STACK_SIZE - 16
-	MFC0	26, 12, 0
+	mfc0	$26, $12, 0
 	li	$27, ~0x7		/* EXL=0, IE=0, ERL=0: refills work in C */
 	and	$26, $26, $27
-	MTC0	26, 12, 0
+	mtc0	$26, $12, 0
 	ehb
 	la	$25, fatal_exception
 	ori	$25, $25, 1
@@ -279,9 +279,9 @@ int_common:
 	sw	$8, 72($29)
 	mflo	$8
 	sw	$8, 76($29)
-	MFC0	8, 14, 0
+	mfc0	$8, $14, 0
 	sw	$8, 80($29)
-	MFC0	8, 12, 0
+	mfc0	$8, $12, 0
 	sw	$8, 84($29)
 	/*
 	 * Run the handler with EXL=0 and IE=0: a TLB miss in C then takes the
@@ -289,7 +289,7 @@ int_common:
 	 */
 	li	$9, ~0x7
 	and	$8, $8, $9
-	MTC0	8, 12, 0
+	mtc0	$8, $12, 0
 	ehb
 	move	$4, $26
 	la	$25, irq_dispatch
@@ -305,10 +305,10 @@ int_common:
 	lw	$9, 84($29)
 	andi	$9, $9, 1
 	or	$8, $8, $9
-	MTC0	8, 12, 0
+	mtc0	$8, $12, 0
 	ehb
 	lw	$8, 80($29)
-	MTC0	8, 14, 0
+	mtc0	$8, $14, 0
 	lw	$8, 72($29)
 	mthi	$8
 	lw	$8, 76($29)
@@ -351,19 +351,19 @@ int_common:
 tlb_flush_dynamic:
 	di	$12
 	ehb
-	MFC0	8, 6, 0			/* Wired */
-	MFC0	13, 10, 0		/* EntryHi */
+	mfc0	$8, $6, 0			/* Wired */
+	mfc0	$13, $10, 0		/* EntryHi */
 	li	$1, FW_REGS_VA
 	li	$9, TLB_NUM_ENTRIES
 	move	$10, $8
 	lui	$14, 0x8000
-1:	MTC0	10, 0, 0
+1:	mtc0	$10, $0, 0
 	sll	$11, $10, 13
 	or	$11, $11, $14
-	MTC0	11, 10, 0
-	MTC0	0, 2, 0
-	MTC0	0, 3, 0
-	MTC0	0, 5, 0
+	mtc0	$11, $10, 0
+	mtc0	$0, $2, 0
+	mtc0	$0, $3, 0
+	mtc0	$0, $5, 0
 	ehb
 	tlbwi
 	ehb
@@ -378,7 +378,7 @@ tlb_flush_dynamic:
 	bne	$10, $9, 1b
 	nop
 	lw	$11, (CR_MIPS_ADDR_REMAP_RANGE_CONFIG + 4)($1)
-	MTC0	13, 10, 0
+	mtc0	$13, $10, 0
 	lui	$11, 0xBFC0
 	ori	$11, $11, 0x1000
 	sw	$8, BD_TLB_NEXT($11)

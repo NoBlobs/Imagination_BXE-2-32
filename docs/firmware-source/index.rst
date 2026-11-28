@@ -11,7 +11,8 @@ and return value.
 The comments are written in the Google style (``Args:`` / ``Returns:``) and
 extracted with `Hawkmoth <https://jnikula.github.io/hawkmoth/>`_, which
 parses the sources with libclang using the firmware's own flags
-(freestanding C23 for ``mipsel``).
+(freestanding GNU C23 for ``mipsel``). Hawkmoth only reads the code;
+the firmware itself is built with GCC.
 
 The two assembly files, ``boot.S`` and ``vectors.S``, cannot be parsed; their
 comments are extracted by a small directive in ``conf.py`` and shown on
@@ -49,5 +50,4 @@ For how the pieces fit together, see :doc:`/firmware/index`.
    inc-layout
    inc-regs
    inc-mips
-   inc-cp0asm
    inc-sfid

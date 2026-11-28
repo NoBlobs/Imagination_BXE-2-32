@@ -67,7 +67,7 @@ Scripts in ``tools/``
    * - ``parse-dump.py``
      - Host
      - Parse render register dumps from firmware debug trace
-   * - ``mkfw.py``, ``gen_sfids.py``, ``ld-wrap.sh``
+   * - ``mkfw.py``, ``gen_sfids.py``, ``check-trace-args.py``
      - Host
      - Build helpers (:doc:`../firmware/build-and-toolchain`)
 

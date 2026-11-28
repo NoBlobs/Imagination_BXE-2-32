@@ -381,6 +381,7 @@ static void pm_pause_ctx(uint32_t ctx, bool on, uint32_t *paused)
  */
 bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
 {
+	static uint32_t load_seq;
 	uint32_t o = c == PM_CTX_GEOM ? PM_CTX_FRAG : PM_CTX_GEOM;
 	struct pm_slot *cs = &pm_slots[c], *os = &pm_slots[o];
 	uint32_t paused = 0, pb;
@@ -394,7 +395,14 @@ bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
 		nfl[i] = hw_rd32(hwrt, HWRT_FREELISTS + 4 * i);
 		oth[i] = os->fl[i];
 		if (cur && (cur != nfl[i] || cs->hwrt != hwrt_fw)) {
-			if (cur == oth[i])
+			/*
+			 * O owns the list only while it runs, or when it loaded the
+			 * list after C did. An O that finished before C's last load
+			 * keeps a stale copy: C's registers are then the newest
+			 * (E050: a geometry's allocations were lost when another
+			 * context's geometry evicted it, and the 3D freed them twice).
+			 */
+			if (cur == oth[i] && (pm_ctx_running(o) || os->seq > cs->seq))
 				pm_pause_ctx(o, true, &paused);       /* O owns it: no store from C */
 			else if (cs->dirty)
 				pm_store_freelist(c, i, fwptr(cur));
@@ -407,6 +415,7 @@ bool pm_sync_load_freelists(uint32_t c, fwaddr_t hwrt_fw, const void *hwrt)
 	}
 	cs->valid = false;
 	cs->dirty = false;
+	cs->seq = ++load_seq;
 	pm_select(c);
 	for (uint32_t i = 0; i < 2; i++) {
 		const struct pm_freelist *fl = fwptr(nfl[i]);

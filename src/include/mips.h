@@ -9,13 +9,8 @@
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 
-#include "cp0asm.h"
-
 /**
  * Read a CP0 register.
- *
- * The instruction is emitted by hand through ``$2`` (see :c:macro:`__CP0_WORD`
- * for the encoding).
  *
  * Args:
  *     reg: CP0 register number (``C0_*``).
@@ -24,10 +19,8 @@
  * Returns:
  *     The register value (``uint32_t``).
  */
-#define mfc0(reg, sel) ({ register uint32_t __v __asm__("$2"); \
-	__asm__ volatile(".hword %1, %2" : "=r"(__v) \
-			 : "i"(__CP0_WORD(0x03, 2, reg, sel) >> 16), \
-			   "i"(__CP0_WORD(0x03, 2, reg, sel) & 0xFFFF)); __v; })
+#define mfc0(reg, sel) ({ uint32_t __v; \
+	__asm__ volatile("mfc0 %0, $%1, %2" : "=r"(__v) : "i"(reg), "i"(sel)); __v; })
 /**
  * Write a CP0 register, followed by ``EHB``.
  *
@@ -36,10 +29,9 @@
  *     sel: Select field.
  *     val: The value.
  */
-#define mtc0(reg, sel, val) do { register uint32_t __v __asm__("$2") = (uint32_t)(val); \
-	__asm__ volatile(".hword %1, %2\n\tehb" :: "r"(__v), \
-			 "i"(__CP0_WORD(0x0B, 2, reg, sel) >> 16), \
-			 "i"(__CP0_WORD(0x0B, 2, reg, sel) & 0xFFFF) : "memory"); } while (0)
+#define mtc0(reg, sel, val) \
+	__asm__ volatile("mtc0 %0, $%1, %2\n\tehb" :: "r"((uint32_t)(val)), "i"(reg), "i"(sel) \
+			 : "memory")
 
 /** CP0 ``Index``. */
 #define C0_INDEX    0

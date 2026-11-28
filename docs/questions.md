@@ -47,7 +47,7 @@ With render-target arrays:
    manufacturer firmware avoid layered partial renders some other way (for example by
    rendering only layer 0 in a `FRAG_PR`, or by refusing the partial render)?
 
-#### Q38 — `vkfwtest stress`: intermittent lockups with four contexts (both firmwares) (answered in `1524931`: cross-context PM free-list sync; implemented in E049, `stress` 8/8)
+#### Q38 — `vkfwtest stress`: intermittent lockups with four contexts (both firmwares) (answered in `1524931`: cross-context PM free-list sync; implemented in E049, `stress` 8/8; the remaining ~4 % failures were a bug in our sync, fixed in E050: 400/400)
 
 [E047](logRefs/E047-vkfwtest-investigation-tests.md). `stress` runs `multiframe`, `pre-ta`,
 `pre-cdm` and `xfer` on four devices at once.

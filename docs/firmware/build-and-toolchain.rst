@@ -8,8 +8,10 @@ Build and toolchain
 Requirements
 ============
 
-* ``clang`` and ``ld.lld`` with the ``Mips`` target (tested with LLVM on
-  Arch Linux), plus ``llvm-objdump``
+* The GNU toolchain for ``mipsel-elf``: GCC and binutils. The default is
+  GCC 16.2.0 with binutils 2.42 in ``/opt/rgxcross``; another one is
+  selected with ``make CROSS=<prefix> GCC=<gcc>``. C23 needs GCC 14 or
+  later.
 * ``python3`` (``tools/mkfw.py``, ``tools/gen_sfids.py``)
 * No libc or libgcc: the firmware is freestanding (``memset``, ``memcpy``,
   ``__udivdi3`` and ``__umoddi3`` live in ``src/util.c``).
@@ -23,6 +25,8 @@ Build commands
    make -C src -B EXP="-DEXP_NO_RENDER"             # retire geometry/fragment commands unrun
    make -C src sfid SFH=<path>/pvr_rogue_fwif_sf.h  # regenerate src/include/sfid.h
    make -C src clean
+   make -C src CROSS=/usr/bin/mipsel-elf- GCC=/usr/bin/mipsel-elf-gcc
+                                                    # another GCC (14 or later)
 
 Outputs in ``build/`` (git-ignored):
 
@@ -37,7 +41,7 @@ Outputs in ``build/`` (git-ignored):
    * - ``build/fw.elf``
      - Linked firmware ELF32 (four ``PT_LOAD`` segments)
    * - ``build/fw.dis``
-     - microMIPS disassembly (``llvm-objdump -d --mattr=+micromips``)
+     - microMIPS disassembly (``mipsel-elf-objdump -d``)
    * - ``build/rogue_36.29.52.182_v1.fw``
      - Packed firmware container loaded by ``powervr.ko``
 
@@ -56,9 +60,10 @@ Compiler flags
 
 .. code-block:: text
 
-   --target=mipsel-unknown-elf -march=mips32r2 -mmicromips -mabi=32 -msoft-float
-   -std=c23 -O2 -g -ffreestanding -fno-builtin -fno-pic -mno-abicalls -G0
+   -EL -march=mips32r2 -mmicromips -mabi=32 -msoft-float
+   -std=gnu23 -O2 -g -ffreestanding -fno-builtin -fno-pic -mno-abicalls -G0
    -mlong-calls -fno-common -fno-stack-protector -fno-jump-tables
+   -fno-delete-null-pointer-checks -mno-check-zero-division
    -Wall -Wextra -Werror -Wno-unused-parameter
 
 .. list-table::
@@ -82,36 +87,37 @@ Compiler flags
        in ``.rodata``.
    * - ``-msoft-float``
      - The microcontroller has no FPU.
+   * - ``-std=gnu23``
+     - GNU C23: ISO C23 (``nullptr``, ``constexpr``, ``static_assert``,
+       ``[[attributes]]``, ``typeof``, ``__STDC_VERSION__ == 202311L``) plus
+       the GNU extensions the code uses (statement expressions, ``__asm__``,
+       ``register`` variables).
+   * - ``-fno-delete-null-pointer-checks``
+     - Without it, GCC at ``-O2`` assumes a null pointer is never
+       dereferenced and turns such paths into a ``teq`` trap
+       (``-fisolate-erroneous-paths-dereference``). In this firmware a trap is
+       a fatal exception, while address 0 merely faults through the TLB.
+   * - ``-mno-check-zero-division``
+     - Without it, GCC follows every division with a ``teq`` trap on a zero
+       divisor. Every division in the firmware is already guarded.
 
-LLVM microMIPS quirks and workarounds
+The GNU toolchain since November 2026
 =====================================
 
-``MFC0`` / ``MTC0`` in microMIPS32r2
-------------------------------------
+Until November 2026 the firmware was built with clang and ``ld.lld``. Moving
+to GCC and binutils removed two LLVM workarounds:
 
-LLVM's assembler rejects microMIPS ``mfc0`` / ``mtc0`` mnemonics unless the
-target is R6. Because the instruction encoding is identical in R2 and R6,
-``src/include/cp0asm.h`` emits the 32-bit encoding directly:
+* LLVM's assembler accepts microMIPS ``mfc0`` / ``mtc0`` only for R6, so
+  ``cp0asm.h`` encoded them by hand as ``.hword`` pairs. GNU ``as`` accepts
+  them, and ``boot.S``, ``vectors.S`` and ``mips.h`` now use the real
+  instructions (the encodings are identical).
+* ``ld.lld`` range-checked microMIPS ``J``/``JAL`` relocations above
+  ``0x80000000`` as if they were PC-relative, so the link needed
+  ``--noinhibit-exec`` and ``tools/ld-wrap.sh`` to filter the false errors.
+  GNU ``ld`` links without warnings.
 
-.. code-block:: text
-
-   word = (rt << 21) | (rs << 16) | (sel << 11) | (op << 6) | 0x3C
-          op: MFC0 = 0x03, MTC0 = 0x0B
-   emitted as two .hword values, high half first (microMIPS 32-bit order)
-
-``src/include/mips.h`` exposes the same encoding to C as ``mfc0(reg, sel)``
-and ``mtc0(reg, sel, v)`` via ``$2``. The bit pattern was verified against
-LLVM's ``-mips32r6 -mmicromips`` output.
-
-``ld.lld`` and ``R_MICROMIPS_26_S1``
-------------------------------------
-
-``ld.lld`` range-checks microMIPS ``J``/``JAL`` relocations as if they were
-PC-relative, causing bogus "relocation out of range" errors for code above
-``0x80000000`` even though the emitted region-relative value is correct
-(verified in ``build/fw.dis``). ``src/Makefile`` therefore links with
-``--noinhibit-exec`` and filters only those specific warning lines via
-``tools/ld-wrap.sh`` while preserving all other diagnostics.
+The code GCC 16 generates is about 25 % smaller (``.text`` 27 KiB instead of
+36 KiB).
 
 Compile-time experiment knobs (``EXP=``)
 ========================================
@@ -185,5 +191,6 @@ Trace ID generation
 
 ``src/include/sfid.h`` is generated by ``tools/gen_sfids.py`` from the public
 Linux header ``pvr_rogue_fwif_sf.h``. Each entry becomes
-``#define SFID_<GROUP>_<id> 0x7nngiiii /* nparams: "format" */``, allowing
+``#define SFID_<GROUP>_<id> 0x7nngiiii``, under a documentation comment that
+holds its format string and parameter count, allowing
 mainline ``pvr_fw_trace.c`` to decode this firmware's traces without changes.

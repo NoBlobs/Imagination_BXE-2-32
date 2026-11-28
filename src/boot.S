@@ -16,7 +16,6 @@
  */
 #include "layout.h"
 #include "regs.h"
-#include "cp0asm.h"
 
 	.set	micromips
 	.set	noreorder
@@ -114,47 +113,47 @@ _reset:
 	MARK	0xA001
 	/* Status: CU0 | BEV | ERL, interrupts off */
 	li	$26, 0x10400004
-	MTC0	26, 12, 0
+	mtc0	$26, $12, 0
 	ehb
 
 	MARK	0xA002
 	/* Config.K0 = 2 (uncached): caches are never used by this firmware */
-	MFC0	26, 16, 0
+	mfc0	$26, $16, 0
 	li	$27, ~7
 	and	$26, $26, $27
 	ori	$26, $26, 2
-	MTC0	26, 16, 0
+	mtc0	$26, $16, 0
 
 	MARK	0xA003
 	/* Config3.ISAOnExc = 1: exception handlers are microMIPS */
-	MFC0	26, 16, 3
+	mfc0	$26, $16, 3
 	lui	$27, 0x0001
 	or	$26, $26, $27
-	MTC0	26, 16, 3
+	mtc0	$26, $16, 3
 
 	MARK	0xA004
 	/* Cause.IV = 1 (dedicated interrupt vectors) */
 	lui	$26, 0x0080
-	MTC0	26, 13, 0
+	mtc0	$26, $13, 0
 
 	MARK	0xA005
 	/* EBase */
 	li	$26, FW_EXC_VA
-	MTC0	26, 15, 1
+	mtc0	$26, $15, 1
 
 	MARK	0xA006
 	/* IntCtl.VS = 256 bytes */
-	MFC0	26, 12, 1
+	mfc0	$26, $12, 1
 	li	$27, ~(0x1F << 5)
 	and	$26, $26, $27
 	ori	$26, $26, (0x08 << 5)
-	MTC0	26, 12, 1
+	mtc0	$26, $12, 1
 
-	MTC0	0, 9, 0		/* Count */
-	MTC0	0, 5, 0		/* PageMask = 4 KiB */
-	MTC0	0, 6, 0		/* Wired = 0 */
-	MTC0	0, 2, 0
-	MTC0	0, 3, 0
+	mtc0	$0, $9, 0		/* Count */
+	mtc0	$0, $5, 0		/* PageMask = 4 KiB */
+	mtc0	$0, $6, 0		/* Wired = 0 */
+	mtc0	$0, $2, 0
+	mtc0	$0, $3, 0
 	ehb
 
 	MARK	0xA007
@@ -162,10 +161,10 @@ _reset:
 	li	$8, 0
 	li	$9, TLB_NUM_ENTRIES
 	lui	$10, 0x8000
-1:	MTC0	8, 0, 0
+1:	mtc0	$8, $0, 0
 	sll	$11, $8, 13
 	or	$11, $11, $10
-	MTC0	11, 10, 0
+	mtc0	$11, $10, 0
 	ehb
 	tlbwi
 	ehb
@@ -180,30 +179,30 @@ _reset:
 	 * decodes the register bank address itself.
 	 */
 	li	$26, 0x001FE000
-	MTC0	26, 5, 0		/* PageMask = 1 MiB */
+	mtc0	$26, $5, 0		/* PageMask = 1 MiB */
 	li	$8, TLB_WIRED_REGS
-	MTC0	8, 0, 0
+	mtc0	$8, $0, 0
 	li	$26, FW_REGS_VA
-	MTC0	26, 10, 0
+	mtc0	$26, $10, 0
 	li	$26, ((FW_REGS_VA >> 12) << 6) | (2 << 3) | 7
-	MTC0	26, 2, 0
+	mtc0	$26, $2, 0
 	li	$26, (((FW_REGS_VA + 0x100000) >> 12) << 6) | (2 << 3) | 7
-	MTC0	26, 3, 0
+	mtc0	$26, $3, 0
 	ehb
 	tlbwi
 	ehb
 	li	$8, TLB_NUM_WIRED	/* extra slot after the fixed ones: broadcast bank */
-	MTC0	8, 0, 0
+	mtc0	$8, $0, 0
 	li	$26, FW_BCAST_VA
-	MTC0	26, 10, 0
+	mtc0	$26, $10, 0
 	li	$26, ((FW_BCAST_VA >> 12) << 6) | (2 << 3) | 7
-	MTC0	26, 2, 0
+	mtc0	$26, $2, 0
 	li	$26, (((FW_BCAST_VA + 0x100000) >> 12) << 6) | (2 << 3) | 7
-	MTC0	26, 3, 0
+	mtc0	$26, $3, 0
 	ehb
 	tlbwi
 	ehb
-	MTC0	0, 5, 0		/* back to 4 KiB pages */
+	mtc0	$0, $5, 0		/* back to 4 KiB pages */
 	ehb
 
 	MARK	0xA009
@@ -235,17 +234,17 @@ _reset:
 	lw	$0, CR_CORE_REVISION($1)
 
 	li	$8, 0			/* slot 0: pages 0/1, slot 1: pages 2/3 */
-3:	MTC0	8, 0, 0
+3:	mtc0	$8, $0, 0
 	sll	$9, $8, 13
 	li	$24, FW_PT_VA
 	addu	$9, $9, $24
-	MTC0	9, 10, 0
+	mtc0	$9, $10, 0
 	srl	$10, $9, 12
 	sll	$10, $10, 6
 	ori	$10, $10, (2 << 3) | 7
-	MTC0	10, 2, 0
+	mtc0	$10, $2, 0
 	addiu	$10, $10, (1 << 6)
-	MTC0	10, 3, 0
+	mtc0	$10, $3, 0
 	ehb
 	tlbwi
 	ehb
@@ -273,19 +272,19 @@ _reset:
 	lw	$0, CR_CORE_REVISION($1)
 
 	li	$8, TLB_WIRED_STACK
-	MTC0	8, 0, 0
+	mtc0	$8, $0, 0
 	li	$9, FW_STACK_VA
-	MTC0	9, 10, 0
+	mtc0	$9, $10, 0
 	li	$10, ((FW_STACK_VA >> 12) << 6) | (2 << 3) | 7
-	MTC0	10, 2, 0
+	mtc0	$10, $2, 0
 	li	$10, (((FW_STACK_VA + 0x1000) >> 12) << 6) | (2 << 3) | 7
-	MTC0	10, 3, 0
+	mtc0	$10, $3, 0
 	ehb
 	tlbwi
 	ehb
 
 	li	$8, TLB_NUM_WIRED + 1	/* fixed entries + broadcast bank */
-	MTC0	8, 6, 0			/* Wired */
+	mtc0	$8, $6, 0			/* Wired */
 	sw	$8, BD_TLB_NEXT($25)
 	sw	$0, BD_IN_EXCEPTION($25)
 	ehb
@@ -302,11 +301,11 @@ _reset:
 
 	/* Leave reset mode: ERET to fw_main with ERL cleared, BEV cleared */
 	li	$26, 0x10000004		/* CU0 | ERL */
-	MTC0	26, 12, 0
+	mtc0	$26, $12, 0
 	ehb
 	la	$26, fw_entry
 	ori	$26, $26, 1		/* microMIPS ISA bit */
-	MTC0	26, 30, 0		/* ErrorEPC */
+	mtc0	$26, $30, 0		/* ErrorEPC */
 	ehb
 	eret
 	nop

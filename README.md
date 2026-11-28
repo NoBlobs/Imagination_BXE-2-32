@@ -74,14 +74,14 @@ commit the new pointer.
 
 ## Building
 
-Requirements: clang and ld.lld with the Mips target, llvm-objdump, python3.
+Requirements: GCC and binutils for `mipsel-elf` (default: `/opt/rgxcross`), python3.
 
 ```bash
 make -C src
 ```
 
 The output is `build/rogue_36.29.52.182_v1.fw`, the container that the mainline
-driver loads. Build flags, the LLVM microMIPS workarounds and the experiment knobs are
+driver loads. Build flags, the toolchain and the experiment knobs are
 described in [docs/firmware/build-and-toolchain.rst](docs/firmware/build-and-toolchain.rst).
 
 ## Running on the K1
@@ -117,7 +117,7 @@ The documentation in `docs/` is written in reStructuredText and built with Sphin
 | [docs/index.rst](docs/index.rst) | `GPL-3.0-or-later` | documentation index, status overview and provenance labels |
 | [docs/hardware/](docs/hardware/index.rst) | `CC-BY-SA-4.0` | BXE-2-32 architecture, MIPS memory/remap, RGX registers, GPU bring-up/PM/HWR, reference board and safety rules |
 | [docs/linux-driver/](docs/linux-driver/index.rst) | `GPL-2.0-only` | mainline `powervr` driver role, kernel branch `IMG-BXE-2-32`, `.fw` container/ABI, host↔firmware protocol, test workflow |
-| [docs/firmware/](docs/firmware/index.rst) | `GPL-3.0-or-later` | source architecture, clang/lld toolchain and knobs, boot/runtime/TLB, scheduler and kicks, power/HWR/stats, status and experiments |
+| [docs/firmware/](docs/firmware/index.rst) | `GPL-3.0-or-later` | source architecture, GCC toolchain and knobs, boot/runtime/TLB, scheduler and kicks, power/HWR/stats, status and experiments |
 | [docs/logRefs/](docs/logRefs/README.md) | `GPL-3.0-or-later` | experiments (`E001`–`E040`) and raw findings |
 
 ## License

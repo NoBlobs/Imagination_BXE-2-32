@@ -210,6 +210,12 @@ struct pm_slot {
 	bool valid;
 	/** ...and its live free-list state is newer than the structures. */
 	bool dirty;
+	/**
+	 * Order of the context's last free-list load (0: none). Of two contexts
+	 * that hold the same list and are idle, the one loaded later ran later,
+	 * so its registers hold the newest copy (E050).
+	 */
+	uint32_t seq;
 };
 extern struct pm_slot pm_slots[2];
 void pm_slot_set(uint32_t ctx, fwaddr_t hwrt);

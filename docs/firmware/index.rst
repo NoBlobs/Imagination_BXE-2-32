@@ -6,7 +6,7 @@ Firmware (Overview)
 ===================
 
 Implementation of the free Imagination Rogue **BXE-2-32** GPU firmware in
-``src/``. It is written in freestanding GNU C23 (``-std=c23``, clang) and
+``src/``. It is written in freestanding GNU C23 (GCC 16, ``-std=gnu23``) and
 microMIPS32r2 assembly, linked into a four-segment ELF32 image and packed
 into ``build/rogue_36.29.52.182_v1.fw`` by ``tools/mkfw.py``.
 

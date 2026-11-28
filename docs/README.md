@@ -31,7 +31,7 @@ docs/
 | `hardware/` | `CC-BY-SA-4.0` | GPU architecture (BVNC `36.29.52.182`, MIPS32r2 microMIPS core, data masters), two-stage MIPS translation and wrapper remap, RGX register map with provenance and writable-bit probe, GPU bring-up / Parameter Manager / flush / HWR hardware behaviour, reference board (`BPI-F3`) and bench safety rules. |
 | `linux-driver/` | `GPL-2.0-only` | Host side of the contract with mainline `drm/imagination` (`powervr.ko`) and Mesa `pvr`, kernel branch `IMG-BXE-2-32` (K1 APMU power domain, DT node, experimental BVNC), `.fw` container and FWIF ABI, host-firmware protocol (KCCB, FWCCB, IRQ, runtime PM, stats, HWR log, debugfs trace), scripts and test workflow. |
 | `firmware-source/` | `GPL-3.0-or-later` | Reference of every source file, function, structure and constant in `src/`, generated from their Google-style `/** */` comments: C with Hawkmoth (libclang), `boot.S` / `vectors.S` with a directive in `conf.py`. |
-| `firmware/` | `GPL-3.0-or-later` | Clean-room implementation (`src/`): source files, interrupt-driven execution model, clang/lld microMIPS toolchain and experiment knobs, `boot.S` / TLB refill / `gpu_init.c`, client CCB scheduler and data-master kicks (CDM, TQ_3D, experimental GEOM/FRAG), power / HWR / stats, current status and experiment findings (`E001`–`E040`). |
+| `firmware/` | `GPL-3.0-or-later` | Clean-room implementation (`src/`): source files, interrupt-driven execution model, GCC microMIPS toolchain and experiment knobs, `boot.S` / TLB refill / `gpu_init.c`, client CCB scheduler and data-master kicks (CDM, TQ_3D, experimental GEOM/FRAG), power / HWR / stats, current status and experiment findings (`E001`–`E040`). |
 
 ### Licenses
 

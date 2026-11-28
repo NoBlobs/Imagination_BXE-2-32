@@ -50,7 +50,7 @@ for _lib in (os.environ.get("LIBCLANG"), "/usr/lib/libclang.so",
 hawkmoth_root = str(Path(__file__).resolve().parent.parent / "src")
 hawkmoth_clang = [
     "-target", "mipsel-unknown-elf",
-    "-std=c23",
+    "-std=gnu23",
     "-ffreestanding",
     f"-I{hawkmoth_root}/include",
 ]
