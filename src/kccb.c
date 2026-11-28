@@ -119,8 +119,17 @@ static uint32_t kccb_handle(const struct kccb_cmd *cmd)
 		break;
 	case KCCB_FREELISTS_RECONSTRUCTION_UPDATE:
 		/* the host rebuilt the free lists and reset their HWRTData (pvr_free_list.c) */
+		pm_reconstruct_update(cmd->data.reconstruct.freelist_ids,
+				      cmd->data.reconstruct.freelist_count);
+		sched_run();            /* the held geometry and 3D may run now */
+		break;
 	case KCCB_ZSBUFFER_BACKING_UPDATE:
 	case KCCB_ZSBUFFER_UNBACKING_UPDATE:
+		spm_zsbuffer_update(cmd->data.zsbuffer.zs_buffer_fw_addr,
+				    cmd->data.zsbuffer.done & 0xFF,
+				    (cmd->cmd_type & 0xFFFF) == KCCB_ZSBUFFER_BACKING_UPDATE);
+		sched_run();            /* a partial render may be armed now */
+		break;
 	case KCCB_NOTIFY_WRITE_OFFSET_UPDATE:
 	case KCCB_OS_ONLINE_STATE_CONFIGURE:
 	case KCCB_REGCONFIG:

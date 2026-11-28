@@ -79,3 +79,13 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 void frag_done(struct dm_state *s);
 bool frag_rta_next(struct dm_state *s);
 void frag_hwr_reset(void);
+/* 3D context store and resume (Q40) */
+void frag_csw_request(fwaddr_t new_ctx);
+bool frag_csw_end(struct dm_state *s, uint32_t ev);
+fwaddr_t frag_csw_yield_to(fwaddr_t ctxaddr);
+void frag_csw_yield_done(void);
+/* compute context store and resume (scheduler.md, 19b96b7) */
+void cdm_csw_request(fwaddr_t new_ctx);
+fwaddr_t cdm_csw_yield_to(fwaddr_t ctxaddr);
+void cdm_csw_yield_done(void);
+void cdm_hwr_reset(void);

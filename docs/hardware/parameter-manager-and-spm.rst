@@ -253,7 +253,9 @@ Freelist reconstruction after HWR
 
 If HWR corrupts active freelists, the firmware sends FWCCB
 ``FREELISTS_RECONSTRUCTION`` (104) and blocks until the host confirms via
-KCCB ``FREELISTS_RECONSTRUCTION_UPDATE`` (112).
+KCCB ``FREELISTS_RECONSTRUCTION_UPDATE`` (112). Our firmware holds the
+geometry and 3D DMs meanwhile (``Holding Scheduling on DM …``); compute and
+transfers keep running (:exp:`E054`).
 
 PM 3D timeout sequence ``[spec]``
 ---------------------------------

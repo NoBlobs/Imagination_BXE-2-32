@@ -25,6 +25,7 @@
 
 /* rogue_fwif_cmd_geom (payload offsets, command-structs.md) */
 #define GEOM_HWRT                0x04
+#define GEOM_PR_BUFFERS          0x08   /* pr_buffer_fw_addr[ZS, MSAA] (cmd_geom_frag_shared) */
 #define GEOM_REGS                0x10
 #define GEOM_FLAGS               0x50
 #define GEOM_PR_FENCE            0x54   /* partial_render_geom_frag_fence (rogue_fwif_ufo) */
@@ -102,6 +103,45 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
 	return *(const uint32_t *)(p + off);
 }
 
+/** Bytes of the render-target cache that are zeroed after an HWR. */
+#define RTC_ZERO_LEN    0x300u
+
+/**
+ * Zero the TPC and the RTC with the CPU (after an HWR).
+ *
+ * Follows ``kick-geometry-ta.md`` E and ``hardware-recovery.md``: on a first
+ * kick with ``geom_caches_need_zeroing`` set, the firmware maps the client
+ * memory and zeroes the tail pointer cache (``tail_ptrs_dev_addr``,
+ * ``hwrtdata_common.tpc_size`` bytes) and, when there is one, the RTC
+ * (``rtc_dev_addr``, ``0x300`` bytes, traced as ``Zero RTC for FWCtx``).
+ * The SLC is flushed before (no dirty line may land over the zeroes) and
+ * after (the GPU must not read a stale line). When part of a range is not
+ * mapped, the SLC flush is all that is done for it.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the render context.
+ *     memctx: Firmware address of its memory context.
+ *     hwrt: The HWRTData.
+ *     common: Its common data.
+ */
+static void geom_zero_caches(fwaddr_t ctxaddr, fwaddr_t memctx, const uint8_t *hwrt,
+			     const uint8_t *common)
+{
+	uint64_t tpc = rd64(hwrt, HWRT_TAIL_PTRS);
+	uint64_t rtc = rd64(hwrt, HWRT_RTC);
+	uint32_t tpc_size = rd32(common, COMMON_TPC_SIZE);
+
+	slc_flush_inval();
+	if (tpc && tpc_size && !gpu_zero(memctx, tpc, tpc_size))
+		TRACE(SFID_DBG_4, 0xE0530001u, (uint32_t)tpc, tpc_size);
+	if (rtc) {
+		TRACE(SFID_HWR_69, ctxaddr, (uint32_t)(rtc >> 32), (uint32_t)rtc, RTC_ZERO_LEN);
+		if (!gpu_zero(memctx, rtc, RTC_ZERO_LEN))
+			TRACE(SFID_DBG_4, 0xE0530002u, (uint32_t)rtc, RTC_ZERO_LEN);
+	}
+	slc_flush_inval();
+}
+
 /**
  * Phase B: load an HWRTData into PM context 0.
  *
@@ -114,11 +154,15 @@ static inline uint32_t rd32(const uint8_t *p, uint32_t off)
  * one evicted reloads its saved catalogues and stack pointers instead.
  *
  * Args:
+ *     ctxaddr: Firmware address of the render context.
+ *     memctx: Firmware address of its memory context.
  *     hwrt_fw: Firmware address of the HWRTData.
  *     hwrt: The HWRTData.
+ *     common: Its common data.
  *     first: This is the first kick of the render.
  */
-static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
+static void geom_pm_load(fwaddr_t ctxaddr, fwaddr_t memctx, fwaddr_t hwrt_fw, uint8_t *hwrt,
+			 const uint8_t *common, bool first)
 {
 	bool ok;
 
@@ -139,13 +183,11 @@ static void geom_pm_load(fwaddr_t hwrt_fw, uint8_t *hwrt, bool first)
 	cr_write64(CR_PM_VHEAP_TABLE, rd64(hwrt, HWRT_VHEAP_TABLE));
 	if (first) {
 		/*
-		 * The reference zeroes the TPC and the RTC with the CPU when the
-		 * flag is set (after HWR); this firmware cannot map client memory
-		 * yet and flushes the SLC instead. The flag stays 1 until TA
-		 * finished of a last kick.
+		 * The flag is set by an HWR, or by a render that never reached
+		 * TA finished of its last kick. It stays 1 until then.
 		 */
 		if (rd32(hwrt, HWRT_GEOM_CACHES_ZEROING))
-			slc_flush_inval();
+			geom_zero_caches(ctxaddr, memctx, hwrt, common);
 		hw_wr32(hwrt, HWRT_GEOM_CACHES_ZEROING, 1);
 		cr_write32(CR_TA_CACHE_INIT_FIRST, 1);
 		if (!cr_poll32(CR_TA_CACHE_INIT_FIRST, 1, 0, 10000))
@@ -320,6 +362,10 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 
 	if (!hwrt || !common || !hwrt_freelist(hwrt, PM_FL_LOCAL))
 		return false;   /* cannot run without a render target: retire */
+	/* a later kick of a render an HWR broke: retire without touching the GPU (Q42) */
+	if (!(flags & GEOM_FLAGS_FIRSTKICK) &&
+	    hwrt_discard(DM_GEOM, ctxaddr, ctx, hwrt_fw, cmd_off))
+		return false;
 
 	/* A. preconditions */
 	slot = bif_activate(ctx->fw_mem_context_fw_addr, DM_GEOM);
@@ -329,7 +375,8 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		bool first = flags & GEOM_FLAGS_FIRSTKICK;
 
 		if (first || !pm_slots[PM_CTX_GEOM].valid || pm_slots[PM_CTX_GEOM].hwrt != hwrt_fw)
-			geom_pm_load(hwrt_fw, hwrt, first);
+			geom_pm_load(ctxaddr, ctx->fw_mem_context_fw_addr, hwrt_fw, hwrt, common,
+				     first);
 		if (!first) {
 			/* mid-TA: the TA cache command of a later kick */
 			cr_write32(CR_TA_CACHE_INIT, 1);
@@ -337,7 +384,11 @@ bool kick_geom(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 				TRACE(SFID_DBG_2, 0xE0430250u);
 		}
 	}
-	spm_geom_kick(hwrt_fw, ctxaddr, cmd + GEOM_PR_FENCE);
+	{
+		const fwaddr_t prb[2] = { rd32(cmd, GEOM_PR_BUFFERS), rd32(cmd, GEOM_PR_BUFFERS + 4) };
+
+		spm_geom_kick(hwrt_fw, ctxaddr, cmd + GEOM_PR_FENCE, prb);
+	}
 
 	/* C. geometry registers (observed by the spec, matched by value in E027) */
 	cr_write32(CR_PPP_CTRL, rd32(regs, 0x1C));

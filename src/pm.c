@@ -541,6 +541,21 @@ static uint32_t *grown_slot(fwaddr_t fl, bool create)
 	return NULL;
 }
 
+/** ``ROGUE_FWIF_PRBUFFER_ZSBUFFER``: index of the ZS buffer in ``pr_buffer_fw_addr[]``. */
+#define PRB_ZS          0
+/** ``ROGUE_FWIF_PRBUFFER_MSAABUFFER``. */
+#define PRB_MSAA        1
+/** ``ROGUE_FWIF_PRBUFFER_MAXSUPPORTED``. */
+#define PRB_MAX         2
+/* rogue_fwif_prbuffer fields (pvr_rogue_fwif_shared.h, Q41) */
+#define PRB_BUFFER_ID   0x00
+#define PRB_ON_DEMAND   0x04
+#define PRB_STATE       0x08
+#define PRB_SUBMITTED   0x10    /* partial renders kicked that use the buffer */
+#define PRB_EXECUTED    0x14    /* ... and finished */
+/** ``rogue_fwif_prbuffer_state``. */
+enum { PRB_UNBACKED, PRB_BACKED, PRB_BACKING_PENDING, PRB_UNBACKING_PENDING };
+
 /**
  * The SPM state of the running geometry: its state, HWRTData, render
  * context, the free list it waits for and its partial-render fence.
@@ -549,6 +564,8 @@ static struct {
 	enum spm_state st;
 	fwaddr_t hwrt, cmd, wait_fl;
 	struct ufo pr_fence;
+	/** The geometry command's ``pr_buffer_fw_addr[]``: ZS and MSAA buffers. */
+	fwaddr_t prb[PRB_MAX];
 } spm;
 
 /**
@@ -562,15 +579,24 @@ static void spm_set(enum spm_state st)
 	static const uint32_t sfid[] = {
 		[SPM_NONE] = SFID_SPM_32, [SPM_WAIT_GROW] = SFID_SPM_34,
 		[SPM_WAIT_HW] = SFID_SPM_35, [SPM_PR_RUNNING] = SFID_SPM_36,
+		[SPM_WAIT_BACKING] = SFID_SPM_33,       /* "PR blocked" */
 	};
 
 	spm.st = st;
 	TRACE(sfid[st]);
 }
 
-/** Reset the SPM and forget the pending grown pages. */
+static void prb_count(uint32_t off);
+
+/**
+ * Reset the SPM and forget the pending grown pages. A partial render that
+ * an HWR cut short counts as executed for its buffers, so that their
+ * cleanup does not wait for it forever.
+ */
 void spm_reset(void)
 {
+	if (spm.st == SPM_PR_RUNNING)
+		prb_count(PRB_EXECUTED);
 	memset(&spm, 0, sizeof(spm));
 	memset(grown, 0, sizeof(grown));
 }
@@ -585,8 +611,11 @@ void spm_reset(void)
  *     hwrt: Firmware address of the HWRTData.
  *     cmd_fw: Firmware address of the render context.
  *     pr_fence: The command's ``partial_render_geom_frag_fence`` UFO.
+ *     pr_buffers: The command's ``pr_buffer_fw_addr[]`` (ZS, MSAA; 0 when the
+ *         host backed the buffer itself).
  */
-void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
+void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence,
+		   const fwaddr_t pr_buffers[PRB_MAX])
 {
 	if (spm.st != SPM_NONE && spm.hwrt == hwrt)
 		return;         /* a later kick of a render still in OOM handling */
@@ -594,6 +623,193 @@ void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence)
 	spm.hwrt = hwrt;
 	spm.cmd = cmd_fw;
 	memcpy(&spm.pr_fence, pr_fence, sizeof(spm.pr_fence));
+	for (uint32_t i = 0; i < PRB_MAX; i++)
+		spm.prb[i] = pr_buffers[i] & FW_VA_MASK;
+}
+
+/* ------------------------------------------- on-demand ZS/MSAA buffers */
+/*
+ * rogue_fwif_prbuffer (pvr_rogue_fwif_shared.h). The host creates the buffer
+ * unbacked when it is on demand; the firmware asks for its pages when the TA
+ * runs out of memory, and gives them back at the buffer's cleanup
+ * (partial-render-spm.md, "On-demand ZS / MSAA buffer backing details", Q41).
+ * The ``PRB_*`` field offsets and states are defined with ``PRB_ZS``.
+ */
+
+/**
+ * Send a ``ZSBUFFER_BACKING`` or ``ZSBUFFER_UNBACKING`` request to the host.
+ *
+ * Args:
+ *     id: The buffer's ``buffer_id``.
+ *     backing: Back (``true``) or unback the buffer.
+ */
+static void prb_request(uint32_t id, bool backing)
+{
+	struct fwccb_cmd c;
+
+	memset(&c, 0, sizeof(c));
+	c.cmd_type = ROGUE_CMD_MAGIC(backing ? FWCCB_ZSBUFFER_BACKING : FWCCB_ZSBUFFER_UNBACKING);
+	c.data[0] = id;         /* rogue_fwif_fwccb_cmd_zsbuffer_backing_data.zs_buffer_id */
+	fwccb_send(&c);
+}
+
+/**
+ * Request the backing of the partial render's buffers, at out of memory
+ * (Q41 items 3 and 4).
+ *
+ * Both non-NULL buffers of ``pr_buffer_fw_addr[]`` are considered, whatever
+ * the fragment command's flags. A buffer that is not on demand or already
+ * backed needs nothing; one whose backing is pending is left alone; an
+ * unbacked one, or one whose unbacking is still pending, is requested at
+ * once and becomes ``BACKING_PENDING``.
+ */
+static void prb_request_all(void)
+{
+	for (uint32_t t = 0; t < PRB_MAX; t++) {
+		uint8_t *b = fwptr(spm.prb[t]);
+		uint32_t id, st;
+
+		if (!b) {
+			if (t == PRB_ZS)
+				TRACE(SFID_SPM_21);
+			else
+				TRACE(SFID_SPM_46, t);
+			continue;
+		}
+		id = hw_rd32(b, PRB_BUFFER_ID);
+		st = hw_rd32(b, PRB_STATE);
+		if (!hw_rd32(b, PRB_ON_DEMAND) || st == PRB_BACKED) {
+			TRACE(t == PRB_ZS ? SFID_SPM_23 : SFID_SPM_47, id);
+		} else if (st == PRB_BACKING_PENDING) {
+			TRACE(t == PRB_ZS ? SFID_SPM_28 : SFID_SPM_51, id);
+		} else {
+			hw_wr32(b, PRB_STATE, PRB_BACKING_PENDING);
+			TRACE(t == PRB_ZS ? SFID_SPM_26 : SFID_SPM_49, id);
+			prb_request(id, true);
+		}
+	}
+}
+
+/**
+ * Whether the partial render may run: it waits only while a backing is
+ * pending (Q41 item 2). An unbacked buffer (its backing failed) does not
+ * block it; the ``FRAG_PR`` then runs without that buffer.
+ *
+ * Returns:
+ *     ``true`` when no buffer of the partial render is ``BACKING_PENDING``.
+ */
+static bool prb_ready(void)
+{
+	bool ready = true;
+
+	for (uint32_t t = 0; t < PRB_MAX; t++) {
+		const uint8_t *b = fwptr(spm.prb[t]);
+
+		if (b && hw_rd32(b, PRB_STATE) == PRB_BACKING_PENDING) {
+			TRACE(t == PRB_ZS ? SFID_SPM_30 : SFID_SPM_31, hw_rd32(b, PRB_BUFFER_ID));
+			ready = false;
+		}
+	}
+	return ready;
+}
+
+/**
+ * Handle a KCCB ``ZSBUFFER_BACKING_UPDATE`` or ``ZSBUFFER_UNBACKING_UPDATE``.
+ *
+ * A backing update makes the buffer ``BACKED``, or ``UNBACKED`` when the host
+ * failed (``SPM_42``); an unbacking update makes it ``UNBACKED``. A partial
+ * render waiting for its buffers is armed once none is pending any more.
+ *
+ * Args:
+ *     zsb: Firmware address of the buffer.
+ *     done: The host succeeded.
+ *     backing: The update answers a backing request (else an unbacking).
+ */
+void spm_zsbuffer_update(fwaddr_t zsb, bool done, bool backing)
+{
+	uint8_t *b = fwptr(zsb & FW_VA_MASK);
+	uint32_t id;
+
+	if (!b)
+		return;
+	id = hw_rd32(b, PRB_BUFFER_ID);
+	if (backing) {
+		hw_wr32(b, PRB_STATE, done ? PRB_BACKED : PRB_UNBACKED);
+		TRACE(done ? SFID_SPM_22 : SFID_SPM_42, id);
+	} else {
+		hw_wr32(b, PRB_STATE, PRB_UNBACKED);
+		TRACE(SFID_SPM_24, id);
+	}
+	if (spm.st == SPM_WAIT_BACKING && prb_ready())
+		spm_set(SPM_WAIT_HW);
+}
+
+/**
+ * Whether the ``FRAG_PR`` must leave out the forced depth/stencil store and
+ * load: its ZS buffer exists but is not backed (Q41 item 2).
+ *
+ * Returns:
+ *     ``true`` when the partial render has a ZS buffer that is not ``BACKED``.
+ */
+bool spm_pr_zs_unbacked(void)
+{
+	const uint8_t *b = fwptr(spm.prb[PRB_ZS]);
+
+	return b && hw_rd32(b, PRB_STATE) != PRB_BACKED;
+}
+
+/**
+ * Count a partial render against its buffers (``submitted`` at the kick,
+ * ``executed`` when it finished), so that cleanup waits for it.
+ *
+ * Args:
+ *     off: ``PRB_SUBMITTED`` or ``PRB_EXECUTED``.
+ */
+static void prb_count(uint32_t off)
+{
+	for (uint32_t t = 0; t < PRB_MAX; t++) {
+		uint8_t *b = fwptr(spm.prb[t]);
+
+		if (b)
+			hw_wr32(b, off, hw_rd32(b, off) + 1);
+	}
+}
+
+/**
+ * Clean up a ZS/MSAA buffer (KCCB ``CLEANUP_ZSBUFFER``, Q41 items 1 and 5).
+ *
+ * - A partial render that uses it has not finished: busy.
+ * - It is on demand and not unbacked: an unbacking is requested (unless one
+ *   is already pending) and the cleanup is busy until the host's
+ *   ``ZSBUFFER_UNBACKING_UPDATE``; the host then retries.
+ * - Otherwise it can be freed.
+ *
+ * Args:
+ *     zsb: Firmware address of the buffer.
+ *
+ * Returns:
+ *     ``true`` when the cleanup must be answered busy.
+ */
+bool spm_zsbuffer_cleanup(fwaddr_t zsb)
+{
+	uint8_t *b = fwptr(zsb & FW_VA_MASK);
+	uint32_t st;
+
+	if (!b)
+		return false;
+	if ((int32_t)(hw_rd32(b, PRB_EXECUTED) - hw_rd32(b, PRB_SUBMITTED)) < 0)
+		return true;
+	st = hw_rd32(b, PRB_STATE);
+	if (!hw_rd32(b, PRB_ON_DEMAND) || st == PRB_UNBACKED) {
+		/* the spec flushes the D-cache here; host memory is uncached in this firmware */
+		return false;
+	}
+	if (st != PRB_UNBACKING_PENDING) {
+		hw_wr32(b, PRB_STATE, PRB_UNBACKING_PENDING);
+		TRACE(SFID_SPM_27, hw_rd32(b, PRB_BUFFER_ID));
+		prb_request(hw_rd32(b, PRB_BUFFER_ID), false);
+	}
+	return true;
 }
 
 /*
@@ -702,6 +918,12 @@ static void start_partial_render(void)
 
 		if (gctx)
 			geom_rta_oom(fwptr(spm.hwrt), gctx->fw_mem_context_fw_addr);
+	}
+	/* on-demand ZS/MSAA buffers first: the partial render stores into them (Q41) */
+	prb_request_all();
+	if (!prb_ready()) {
+		spm_set(SPM_WAIT_BACKING);
+		return;
 	}
 	/*
 	 * The scheduler now runs the fragment context's FRAG_PR as a partial
@@ -871,6 +1093,7 @@ bool spm_pr_armed(fwaddr_t hwrt)
 /** Record that the armed partial render was kicked. */
 void spm_pr_started(void)
 {
+	prb_count(PRB_SUBMITTED);
 	spm_set(SPM_PR_RUNNING);
 }
 
@@ -887,6 +1110,7 @@ void spm_pr_done(void)
 	const void *hwrt = fwptr(spm.hwrt);
 
 	cr_write32(CR_PM_PARTIAL_RENDER_ENABLE, 0);
+	prb_count(PRB_EXECUTED);
 	/* the 3D PM context's state is the partial render's: drop the slot */
 	pm_slots[PM_CTX_FRAG].valid = false;
 	pm_slots[PM_CTX_FRAG].dirty = false;
@@ -913,6 +1137,51 @@ void spm_pr_done(void)
 /** At most this many free lists per reconstruction request (``ROGUE_FWIF_MAX_FREELISTS_TO_RECONSTRUCT``). */
 #define MAX_FL_RECONSTRUCT 18   /* ROGUE_FWIF_MAX_FREELISTS_TO_RECONSTRUCT */
 
+/** Flag set in a free-list ID of the reconstruction update when the host failed. */
+#define FL_RECONSTRUCT_FAILED 0x80000000u   /* ROGUE_FWIF_FREELISTS_RECONSTRUCTION_FAILED_FLAG */
+
+/**
+ * Free lists whose reconstruction the host has not confirmed yet, and the DMs
+ * that the scheduler holds meanwhile (traced once per DM).
+ */
+static struct {
+	uint32_t ids[MAX_FL_RECONSTRUCT];
+	uint32_t cnt;
+	uint32_t held;
+} recon;
+
+/**
+ * Add a free list to a reconstruction request, once.
+ *
+ * Also records it as pending until the host's update, clears its grow
+ * request and traces the request.
+ *
+ * Args:
+ *     ids: IDs of the request.
+ *     cnt: Number of entries in ``ids``, updated.
+ *     fl_fw: Firmware address of the free list.
+ */
+static void fl_collect(uint32_t *ids, uint32_t *cnt, fwaddr_t fl_fw)
+{
+	struct pm_freelist *fl = fwptr(fl_fw);
+	bool dup = false;
+
+	if (!fl)
+		return;
+	fl->grow_pending = 0;
+	for (uint32_t k = 0; k < *cnt; k++)
+		dup |= ids[k] == fl->freelist_id;
+	if (dup || *cnt >= MAX_FL_RECONSTRUCT)
+		return;
+	ids[(*cnt)++] = fl->freelist_id;
+	TRACE(SFID_HWR_52, fl_fw, fl->freelist_id);
+	for (uint32_t k = 0; k < recon.cnt; k++)
+		if (recon.ids[k] == fl->freelist_id)
+			return;
+	if (recon.cnt < MAX_FL_RECONSTRUCT)
+		recon.ids[recon.cnt++] = fl->freelist_id;
+}
+
 /**
  * Ask the host to rebuild the free lists after a hardware recovery
  * (``hardware-recovery.md`` step 4).
@@ -921,7 +1190,9 @@ void spm_pr_done(void)
  * every free list of the given HWRTData, resets the SPM and the PM context
  * tracking, marks those HWRTData ``HWR`` with the caches to be zeroed, and
  * sends ``FWCCB_FREELISTS_RECONSTRUCTION`` with the list IDs and the HWR
- * count.
+ * count. The geometry and 3D DMs are then held until the host confirms the
+ * rebuild (:c:func:`pm_reconstruct_update`, E054): the host rewrites the free
+ * lists in memory meanwhile.
  *
  * Args:
  *     hwrts: Firmware addresses of the HWRTData in use.
@@ -934,18 +1205,8 @@ void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n)
 
 	/* every free list loaded in a PM slot (hardware-recovery.md step 4) */
 	for (uint32_t ctx = 0; ctx < 2; ctx++)
-		for (uint32_t w = 0; pm_slots[ctx].valid && w < 2; w++) {
-			struct pm_freelist *fl = fwptr(pm_slots[ctx].fl[w]);
-			bool dup = false;
-
-			if (!fl)
-				continue;
-			for (uint32_t k = 0; k < cnt; k++)
-				dup |= ids[k] == fl->freelist_id;
-			if (!dup && cnt < MAX_FL_RECONSTRUCT)
-				ids[cnt++] = fl->freelist_id;
-			fl->grow_pending = 0;
-		}
+		for (uint32_t w = 0; pm_slots[ctx].valid && w < 2; w++)
+			fl_collect(ids, &cnt, pm_slots[ctx].fl[w]);
 	spm_reset();
 	pm_invalidate();
 	for (uint32_t i = 0; i < n; i++) {
@@ -955,18 +1216,8 @@ void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n)
 			continue;
 		hw_wr32(h, HWRT_STATE, RTDATA_STATE_HWR);
 		hw_wr32(h, HWRT_GEOM_CACHES_ZEROING, 1);
-		for (uint32_t w = 0; w < 2; w++) {
-			struct pm_freelist *fl = hwrt_freelist(h, w);
-			bool dup = false;
-
-			if (!fl)
-				continue;
-			for (uint32_t k = 0; k < cnt; k++)
-				dup |= ids[k] == fl->freelist_id;
-			if (!dup && cnt < MAX_FL_RECONSTRUCT)
-				ids[cnt++] = fl->freelist_id;
-			fl->grow_pending = 0;
-		}
+		for (uint32_t w = 0; w < 2; w++)
+			fl_collect(ids, &cnt, hw_rd32(h, HWRT_FREELISTS + 4 * w));
 	}
 	if (!cnt)
 		return;
@@ -977,4 +1228,95 @@ void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n)
 	for (uint32_t k = 0; k < cnt; k++)
 		c.data[2 + k] = ids[k];
 	fwccb_send(&c);
+}
+
+/**
+ * Discard a command whose HWRTData an HWR left in the ``HWR`` state (Q42).
+ *
+ * ``hardware-recovery.md`` "Discarded geometry and subsequent 3D commands":
+ * a 3D or a non-first geometry kick on an HWRTData in state ``HWR`` (set by
+ * the recovery and by the host's free-list reconstruction) must not touch
+ * the GPU. The command is retired (its fences are then updated by the
+ * commands that follow it) and the context's resume flags are cleared. A
+ * first geometry kick is never discarded: it moves the state on.
+ *
+ * Args:
+ *     dm: The data master of the command.
+ *     ctxaddr: Firmware address of the context.
+ *     ctx: The context.
+ *     hwrt_fw: Firmware address of the HWRTData.
+ *     cmd_off: Offset of the command in the client CCB.
+ *
+ * Returns:
+ *     ``true`` when the command must be retired without running.
+ */
+bool hwrt_discard(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
+		  fwaddr_t hwrt_fw, uint32_t cmd_off)
+{
+	const void *h = fwptr(hwrt_fw);
+	uint32_t st;
+
+	if (!h || (st = hw_rd32(h, HWRT_STATE)) != RTDATA_STATE_HWR)
+		return false;
+	ctx->fw_com_ctx_flags &= ~0xFFu;
+	TRACE(SFID_HWR_15, dm, 1u, hwrt_fw, st, ctxaddr, cmd_off);
+	return true;
+}
+
+/**
+ * Handle the host's ``KCCB_FREELISTS_RECONSTRUCTION_UPDATE``.
+ *
+ * Each listed free list is no longer pending (``HWR_53``, or ``HWR_55``
+ * when the host flags a failure; the list is released either way, since the
+ * mainline host never fails). Once none is pending, the held DMs may run
+ * again (``RTD_22``); the caller runs the scheduler.
+ *
+ * Args:
+ *     ids: The free-list IDs of the update.
+ *     n: Number of entries in ``ids``.
+ */
+void pm_reconstruct_update(const uint32_t *ids, uint32_t n)
+{
+	if (n > MAX_FL_RECONSTRUCT)
+		n = MAX_FL_RECONSTRUCT;
+	for (uint32_t i = 0; i < n; i++) {
+		uint32_t id = ids[i] & ~FL_RECONSTRUCT_FAILED;
+
+		if (ids[i] & FL_RECONSTRUCT_FAILED)
+			TRACE(SFID_HWR_55, id);
+		else
+			TRACE(SFID_HWR_53, id);
+		for (uint32_t k = 0; k < recon.cnt; k++)
+			if (recon.ids[k] == id) {
+				recon.ids[k] = recon.ids[--recon.cnt];
+				break;
+			}
+	}
+	if (!recon.cnt && recon.held) {
+		recon.held = 0;
+		TRACE(SFID_RTD_22);
+	}
+}
+
+/**
+ * Whether a DM must wait for a free-list reconstruction.
+ *
+ * The geometry and 3D DMs use the free lists, so they are held while any
+ * reconstruction is pending (``HWR_63``, traced once per DM and HWR).
+ *
+ * Args:
+ *     dm: The data master.
+ *
+ * Returns:
+ *     ``true`` when the DM must not start a task now.
+ */
+bool pm_reconstruct_hold(uint32_t dm)
+{
+	if (!recon.cnt || (dm != DM_GEOM && dm != DM_FRAG))
+		return false;
+	if (!(recon.held & (1u << dm))) {
+		recon.held |= 1u << dm;
+		TRACE(SFID_HWR_63, dm, 0u);
+	}
+	return true;
 }

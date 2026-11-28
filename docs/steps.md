@@ -51,15 +51,15 @@ The phases below keep their content; their acceptance checks are read against th
 
 | Phase | State |
 |---|---|
-| 1 | Done (E041–E043): PM slots, TA-finished TPC/RTC flush, full geometry flush, RTC programming, PM-MMU invalidation, first-kick PM reset pulses. **The second HWRTData works** (`pre-3d`, `pre-ta` pass). CPU zeroing of TPC/RTC after HWR not done (SLC flush instead). |
+| 1 | Done (E041–E043): PM slots, TA-finished TPC/RTC flush, full geometry flush, RTC programming, PM-MMU invalidation, first-kick PM reset pulses. **The second HWRTData works** (`pre-3d`, `pre-ta` pass). CPU zeroing of TPC/RTC after HWR done (E053). |
 | 2 | Stages A and C pass. Stage B runs the pixel-checking `vkfwtest` (E044): `pre-cdm`, `xfer` pass; `multiframe`, `pre-ta`, `bigpb` fail on wrong pixels, **the same way as with the manufacturer firmware** (`docsClean` `50055ae`). Full battery 16/20/3 vs the reference's 18/18/3: only `queries`, `indirect`, `vertex-ext` differ. Stage D (`vkfwtest xfer` after suspend) passes after stage A; it fails after compute/sync suites (E043). |
 | 3 | Non-first kicks, `owner_geom`, HWRTData states done; no workload exercising them yet. |
-| 4 | Ready pages, grow, TA stop/resume, `FRAG_PR` via the SPM failing-UFO check: **the first partial render of a frame runs and the TA restarts**; the second restart faults (Q30). ZS backing not done. |
-| 5 | Full HWR teardown done (E043). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`**. The manufacturer firmware on Mesa and the vendor stack behave the same, so this is not a firmware gap. |
+| 4 | Ready pages, grow, TA stop/resume, `FRAG_PR` via the SPM failing-UFO check: **the first partial render of a frame runs and the TA restarts**; the second restart faults (Q30). On-demand ZS backing implemented in E052, revised with the Q41 answer in E056 (untested: the mainline host never asks for it). |
+| 5 | Full HWR teardown done (E043); TPC/RTC zeroing after HWR (E053); geometry and 3D held until the free-list reconstruction update (E054). 3D and non-first TA on an HWRTData in state `HWR` are discarded (E056, Q42): after a 3D lockup only 1 frame is lost, no second HWR (E057). `vkfwtest hwr-lockup` (E044): recovery after 30 s and compute works afterwards, but **the guilty fence signals normally: no `VK_ERROR_DEVICE_LOST`**. The manufacturer firmware on Mesa and the vendor stack behave the same, so this is not a firmware gap. |
 | 6 | BIF/PM state reset at `POW_OFF`, `kick_init()` at boot; barriers already in place. Stage D passes. |
 | 7 | Firmware reports 1.1. RTA implemented (E045): RTC count and bitmap scan (client memory read through a GPU-MMU walk), `valid_render_targets[]`, per-layer region headers, `RENDER_TGT_ID` (`0x03D8`), ZLS/SLS, `zslice`, `CR[0x03E0]`, layer loop at `PIXELBE_END_RENDER`. With RTA on, every `vkfwtest rta` step gives the manufacturer firmware's result (the `LOAD` subset step fails on both, Mesa side, Q36). Open: kernel FW_INFO query, `FRAG_PR` loop (after Q30). |
-| 8 | Not started (optional). |
-| 9 | Trace argument check done; others open. |
+| 8 | **3D preemption works** (E056, E057): 35 stores and resumes in `prio-3d`, probe latency 64–70 ms vs 152 ms without. Behind `OS_CTXSWITCH_FRAG_EN` (or `EXP_CSW_FORCE`): the mainline kernel leaves it off. CDM store implemented; it faults at `0xd0` like the original firmware on this host. TA store waits for Q43. |
+| 9 | Done: trace argument check; Q25 transfers, the `0x0C68` wait and the clock (E055). |
 | 10 | `fw-preflight.py`, `oracle.sh` (stage B/D on `vkfwtest`, `new_trace`), `check-trace-args.py`, **`vkfwtest`** (own repository, `tools/deploy.sh vkfwtest`) done. |
 
 ---
@@ -316,16 +316,18 @@ and resumes without faults.
 
 ## 9. Remaining items
 
-- **Q25:** the transfer cases that still fail (`buffer_to_buffer_with_offset`, NPOT,
-  mirror). The answer says they are host-side; confirm against the current Mesa.
-- **`0x0C68`:** the wait for the return to 0 sometimes times out (E038). Decide whether
-  to keep, shorten or drop it.
+- **Q25:** done (E055). The offset copy, NPOT and mirror cases pass in the `vkfwtest`
+  transfer group (`xfer`, `buffers`, `image-copy`, …).
+- **`0x0C68`:** done (E055). The wait is kept as the spec says, bounded at 10 ms; 0
+  timeouts in `-k all` plus 20 × `stress`.
 - **Q26:** the remaining KCCB commands are consumed with `CMD_EXECUTED`, as answered;
   keep a test for each.
 - **Trace hygiene:** pass every `TRACE` the argument count of its SFID. The `cr_poll32`
   bug of E037 came from this; a build-time check in `gen_sfids.py` would catch it.
-- **Clock:** the oracle runs the GPU at 819.2 MHz. Check the board's clock tree, since
-  1 GHz shows errors at stock voltage.
+- **Clock:** done (E055). `gpu_clk` runs at 307.2 MHz (`pll1_d4_614p4` / 2, no OPP
+  table in the DT); the firmware follows the rate the host gives it. Running at 819.2 MHz
+  like the oracle is a device-tree change (`pll1_d3_819p2` and the regulator), outside the
+  firmware.
 
 ---
 

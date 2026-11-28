@@ -9,19 +9,156 @@ answered, the implementation uses the stated assumption.
 
 ## Questions, newest first
 
-**State on 2026-11-27: no question is open.**
+**State on 2026-11-28: Q43 (TA context store register mapping) is open. Q40–Q42 were
+answered in `05cfa90`, implemented in E056 and tested in E057.**
 - Every question below has been answered in `docsClean` or resolved by an experiment; each
   heading says where.
 - With the Mesa and kernel fixes of E048, the firmware passes the whole vkfwtest battery
   (48 pass / 2 skip) and gives the manufacturer firmware's results on every test (E049).
-- **Still to implement (answered in the spec, no question pending):**
-  - preemption, i.e. context store and resume (Q24, `steps.md` phase 8, optional);
-  - on-demand `ZSBUFFER_BACKING` (Q23, Q30 item 4), which no test exercises.
+- **Still to implement:**
+  - preemption (Q24, `steps.md` phase 8, optional): the 3D store and resume work (E056,
+    E057, behind `OS_CTXSWITCH_FRAG_EN` or `EXP_CSW_FORCE`). The CDM store is implemented
+    and, like the original firmware, faults on this host (E057). The TA store waits for
+    Q43;
+  - on-demand `ZSBUFFER_BACKING` (Q23, Q30 item 4): implemented in E052 and revised with
+    the Q41 answer in E056, but the mainline stack never uses it, so it is untested.
 
 Field names are those of the public `pvr_rogue_fwif*.h`. `CR[x]` is the primary-core bank and
 `BCAST[x]` the broadcast bank, as in the spec.
 
 ### After 2026-11-09: the PM, partial renders, render-target arrays and the vkfwtest battery
+
+#### Q43 — TA context store: which public fields are the "task sizes"? (open, 2026-11-28)
+
+`scheduler.md` (`19b96b7`), "TA (geometry / DM 2) context store and resume", writes from
+"buffer `buf`'s store task descriptors":
+- `CR[0x0438]` = `task0`, `CR[0x0440]` = `task1`, `CR[0x0448]` = `task2`;
+- `CR[0x0450]` = `task0_size | cmd_ta.vdm_context_store_task0_size_override`;
+- `CR[0x0458]` = `task1_size`, `CR[0x0460]` = `task2_size`.
+
+The public `rogue_fwif_geom_registers_caswitch.geom_state[2]` has ten fields per buffer:
+`vdm_context_store_task0..2`, `vdm_context_resume_task0..2`, `vdm_context_store_task3..4`
+and `vdm_context_resume_task3..4`. No field is named `*_size`.
+
+1. Which `geom_state[buf]` fields go to `0x0438`/`0x0440`/`0x0448`, and which to
+   `0x0450`/`0x0458`/`0x0460`? For example, are the "sizes" `vdm_context_store_task3`/`4`,
+   or the `resume_task*` words?
+2. Is `vdm_context_store_task0_size_override` the `cmd_geom` register-set field
+   `vdm_context_resume_task0_size` (`0x2001_0000` in the observed jobs)?
+3. Is `vdm_context_state_base_addr` / `ta_context_state_base_addr` taken from the render
+   context's `static_render_context_state.ctxswitch_regs[0]` (render context `+0x130`) or
+   from the command?
+4. Which DM 2 completion event marks the end of a store: `TA_FINISHED` as usual, or also
+   `TA_TERMINATE`?
+
+**Assumption until answered:** no TA store. A higher-priority geometry waits for the
+running one, which the reference also effectively does on this stack (Q24).
+
+#### Q42 — After an HWR that discards a geometry, what happens to the 3D of that render? (answered in `05cfa90`: discard a 3D or non-first TA on an HWRTData in state `HWR`; implemented in E056)
+
+[E053](logRefs/E053-hwr-cache-zeroing.md) and
+[E054](logRefs/E054-freelist-reconstruction-hold.md) set up the following.
+- A `multiframe` renderer keeps submitting frames on one device and one framebuffer.
+- Beside it, `hwr-frag` locks up the 3D.
+- The 30 s watchdog finds DM 3 locked (the guilty context) and DM 2 overrunning (the
+  renderer's geometry, waiting). It discards both commands (`Discarded cmd on DM…`) and
+  resets.
+
+The firmware then:
+- requests the free-list reconstruction and holds DM 2/3 until the update (E054);
+- zeroes the TPC/RTC on the next first kick (E053).
+
+About 36 ms after the first HWR, **the renderer's 3D locks up**, and the kernel reports a
+page fault at address 0. The 3D is very likely the 3D of the frame whose geometry was
+discarded. A second HWR follows. Depending on timing there is sometimes a third, after
+another 30 s. 1–3 frames are wrong, and the frames after them are right.
+
+The result is identical when the E053 zeroing or the E054 hold is disabled.
+
+1. When the HWR discards a geometry command, what does the firmware do with the 3D command
+   (`FRAG` / `FRAG_PR`) of the same HWRTData that is still queued in the render context? Is
+   it run, skipped and its fences updated, or is the context marked so that the 3D is
+   discarded too?
+2. Does the firmware check `hwrtdata.state` (`HWR`, set by the firmware and again by the
+   host's reconstruction) or `HWRTDATA_HAS_LAST_GEOM` (which the host clears) before
+   kicking a 3D? What does it do when the geometry did not complete?
+3. An innocent context's geometry that merely waited (`Guilty overrunning` on DM 2): is
+   it discarded, or retried after the reset?
+
+**Answer (`05cfa90`, `hardware-recovery.md`):** the kick of a 3D or of a non-first TA on an HWRTData in state `HWR` (9) is discarded without touching the GPU, and its fences are updated; a first kick moves the state to 2. A waiting DM 2 geometry is discarded, not retried. Implemented in E056.
+
+#### Q41 — On-demand ZS/MSAA buffer backing: when to unback, and what to do when backing fails? (answered in `05cfa90`: unback only at cleanup; a failed backing lets `FRAG_PR` run without the buffer; implemented in E056)
+
+[E052](logRefs/E052-zsbuffer-on-demand.md) implements the request side from
+`partial-render-spm.md` ("requested on demand ... only when `cmd_geom.pr_buffer_fw_addr[]`
+is non-zero"), the public `rogue_fwif_prbuffer` (`buffer_id`, `on_demand`, `state`), the
+FWCCB/KCCB payloads and the public `SPM` trace strings (ids 21–31, 42, 46–52). The spec
+does not say:
+
+1. **When the buffers are unbacked.** Assumed: when the final (non-partial) render of the
+   HWRTData that backed them finishes. Or at a later point (context cleanup, never)?
+2. **A failed backing** (`ZSBUFFER_BACKING_UPDATE` with `done = false`, trace `SPM_42`).
+   Assumed: the TA stays stopped and the watchdog recovers the context. Or does the partial
+   render run without the buffer, or is the request repeated?
+3. **Which buffers a partial render needs.** Assumed: both `pr_buffer_fw_addr[ZS]` and
+   `[MSAA]` of the geometry command that ran out of memory, before the `FRAG_PR` is kicked,
+   both through `FWCCB_ZSBUFFER_BACKING` (there is no separate MSAA command). Does the
+   reference check `cmd_frag` flags first (for example, only when the render has a depth or
+   stencil buffer)? `MAIN_47` ("No ZS Buffer used for partial render (store)") suggests a
+   check at the `FRAG_PR` kick.
+4. **Unbacking pending when a partial render needs the buffer again.** Assumed: wait for the
+   unbacking update, then request the backing again.
+5. **Cleanup.** Assumed: `CLEANUP_ZSBUFFER` is busy while a request is pending or while the
+   buffer is backed for a render that has not finished (traces `CLEANUP_8`/`_9`).
+
+The mainline kernel never fills `pr_buffer_fw_addr[]` (it only sets `frame_num` and
+`hwrt_data_fw_addr` of `cmd_shared`), so none of this runs on the current stack.
+
+#### Q40 — 3D context store and resume: what is saved, and how a store is told from a normal end? (answered in `05cfa90`: `0x0130` bit 3 and `0x1038` bit 0; `0x1008`, `0x0360`, `0x0370` saved; implemented in E056)
+
+Implementing preemption (`steps.md` phase 8, Q24). [E051](logRefs/E051-3d-store-probe.md)
+requested a 3D store on our firmware (`BCAST[0x1000] = 1` while `(ISP_RENDER & 3) != 3`,
+when a higher-priority 3D waited, `vkfwtest prio-3d`):
+- the low-priority render ended about 40 k timer ticks after the request (instead of
+  ~1.7 s), with the normal `PIXELBE_END_RENDER` and no fault;
+- **`PM_3D_MEM_FREE` did not follow**, and the free list stored from PM context 1 still had
+  the 6 pages allocated;
+- at that completion `ISP_RENDER`, `0x1000`, `0x1020`, `0x0298` and `0x01C8` all read **0**,
+  exactly as at the end of a normal render. `EVENT_STATUS` was `0x400` in both cases.
+
+So the registers in the spec do not show whether the store happened, nor where the per-pipe
+value that the resume writes into `0x1020` comes from. Questions:
+
+1. **Store or end.** After a store request, how does the firmware tell, at
+   `PIXELBE_END_RENDER`, that the render was stored rather than finished (a status register
+   or bit, or the missing `PM_3D_MEM_FREE`)? Can the request arrive too late and the render
+   finish normally?
+2. **What is saved into `rogue_fwif_frag_ctx_state`.** Which registers are read at store
+   completion for `frag_reg_pm_deallocated_mask_status`, `frag_reg_dm_pds_mtilefree_status`
+   and each `frag_reg_isp_store[]` entry? How many entries on BXE-2-32
+   (`num_isp_ipp_pipes`?), and which of the trace formats (`CSW_20`, `CSW_39`, `CSW_42`)
+   does this core use?
+3. **Resume writes.** The register that takes each `frag_reg_isp_store[]` entry (`CR[0x1020]`
+   alone, or one per pipe?), and which field goes to `0x0298` and which to `0x01C8`. Where in
+   the kick are they written: after phase D, before `0x0F00 = 1`?
+4. **Completion of a stored render.** Which steps of the normal completion are skipped: the
+   wait for `PM_3D_MEM_FREE`, the free-list store from PM context 1, the PM-MMU
+   invalidation, the cache flush, the UFO updates, the retire. Which HWRTData state is set
+   (the trace shows `HWRTData0State=3`)? Is `NEED_RESUME` set in `fw_com_ctx_flags` at that
+   point, and cleared at the resume kick?
+5. **Resume kick.** Is it the normal 3D kick of the same command (PM load of the same
+   HWRTData, free lists from the structures, `CSW resume:1`), plus the writes of item 3? Does
+   a render-target array restart at the stored layer?
+6. **When to request.** Besides priority: the HCS watchdog (time, and what "forces the
+   switch" does), what happens when `(ISP_RENDER & 3) == 3` (retry later?), and whether a
+   `TQ_3D` is ever stored (`CSW_12` exists).
+7. **Geometry.** Since the TA store is only satisfied at the end of the TA on this stack, is
+   the TA side just the `CSW_17` / `CSW_16` traces around the normal `TA finished`, or does
+   the firmware also program `0x0428`, `0x0CC0`, `0x0438`–`0x0460` and `0x0468 = 1` (the
+   **[D]** sequence in `observed-sequences.md`)?
+
+**Answer (`05cfa90`, `scheduler.md`):** see the E056 summary. The TA and CDM stores, and
+the layout of the geometry context-state buffer, stay `PENDING`.
 
 #### Q39 — What gives the background object its render target index (layered loads and partial renders)? (answered in `1524931`: only `0x03D8`; `FRAG_PR` runs the layer loop; implemented in E049)
 
@@ -794,7 +931,7 @@ deallocation" for a partial render.
 | Q | Answer | Where |
 |---|---|---|
 | Q29 / Q29b second HWRTData | PM-MMU invalidation (SLC `0x10`, `BIF_CTRL_INVAL = 4`, `0x1348`) at every first kick, HWRTData switch and 3D finished; first-kick `0x0258` + PM reset pulses `0x0290`/`0x0198`; full HWR teardown. **Implemented: `pre-3d`, `pre-ta` pass.** | `docsClean/kick-geometry-ta.md`, `hardware-recovery.md`; [E043](logRefs/E043-pm-mmu-inval-first-kick-reset-hwr.md) |
-| Q19b TPC flush, geometry flush, cache zeroing | TA finished: `0x0260` VHEAP store, `0x0C50 = 0x40000000` + poll, RTC flush `0x0CB8 = 2`; full DM 2 flush column; zeroing via CPU + `0x0258`/`0x0250`. **Implemented** (CPU zeroing replaced by an SLC flush). | `docsClean/kick-geometry-ta.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
+| Q19b TPC flush, geometry flush, cache zeroing | TA finished: `0x0260` VHEAP store, `0x0C50 = 0x40000000` + poll, RTC flush `0x0CB8 = 2`; full DM 2 flush column; zeroing via CPU + `0x0258`/`0x0250`. **Implemented**, CPU zeroing included ([E053](logRefs/E053-hwr-cache-zeroing.md)). | `docsClean/kick-geometry-ta.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
 | Q25 NPOT copies | GPU-init step 9 TPU/PBE/ISP defaults (`0x17B8` mode, `0x1780`, …). **Implemented: `copy_and_blit` 23/23.** | `docsClean/boot-gpu-init.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
 | Q28 OOM resume | `0x0328 = 1` after the paused update; stop with `0x0320`/`0x0CF0`, resume with `0x0328` + `0x0CF8`; PR restart sequence; always the global list. **Implemented: `bigpb` frame 0 completes.** | `docsClean/partial-render-spm.md`; [E042](logRefs/E042-spec-fab1fc9-tpc-oom-init.md) |
 | Q1 MTS init / event routing | `MTS_DMn_INTERRUPT_ENABLE` (DM0 `0x89200`, DM2 `0xA0`, DM3 `0x08`, DM4 `0x04`), `EVENT_ENABLE = 0`, `INTCTX = 0xFFFF`, `BGCTX = 1`. **Implemented**, but see Q9. | `docsClean/boot-gpu-init.md` B/C; [E011](logRefs/E011-event-enable-0x0128.md) |

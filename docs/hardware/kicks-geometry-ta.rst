@@ -140,8 +140,10 @@ D. Context-switch state and post-HWR zeroing ``[spec]``
 * New kick vs. resume programs ``0x0CE0``, ``0x0CB0``, ``0x0CB8 = 1``,
   ``0x0C48`` and ``0x0D20`` (state buffer address, ``0`` if none); on resume
   the TA state buffer flips between A and B.
-* After HWR, if ``hwrtdata.geom_caches_need_zeroing`` is set, RTC and TA
-  caches are cleared before the kick.
+* After HWR, if ``hwrtdata.geom_caches_need_zeroing`` is set, the first kick
+  zeroes the TPC (``tail_ptrs_dev_addr``, ``tpc_size`` bytes) and the RTC
+  (``rtc_dev_addr``, ``0x300`` bytes) with the CPU, through the GPU MMU
+  (``geom_zero_caches()``, E053).
 * ``CR[0x40A8] = (primary_core & 1)`` selects core/TE routing.
 
 E. Context enable (mandatory poll)

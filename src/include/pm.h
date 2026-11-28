@@ -235,8 +235,14 @@ enum spm_state {
 	SPM_WAIT_HW,
 	/** The partial render runs. */
 	SPM_PR_RUNNING,
+	/** A partial render waits for the host to back its on-demand ZS/MSAA buffers. */
+	SPM_WAIT_BACKING,
 };
-void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence);
+void spm_geom_kick(fwaddr_t hwrt, fwaddr_t cmd_fw, const void *pr_fence,
+		   const fwaddr_t pr_buffers[2]);
+void spm_zsbuffer_update(fwaddr_t zsb, bool done, bool backing);
+bool spm_zsbuffer_cleanup(fwaddr_t zsb);
+bool spm_pr_zs_unbacked(void);
 void spm_oom(void);
 bool spm_pr_armed(fwaddr_t hwrt);
 bool spm_pr_fence_ok(const struct ufo *u);
@@ -246,3 +252,10 @@ void spm_grow_update(fwaddr_t fl_addr, uint32_t delta, uint32_t new_pages, uint3
 void spm_reset(void);
 /* HWR: ask the host to rebuild the free lists of the given HWRTData. */
 void pm_hwr_reconstruct(const fwaddr_t *hwrts, uint32_t n);
+/* The host's reconstruction update: the listed free lists are rebuilt (E054). */
+void pm_reconstruct_update(const uint32_t *ids, uint32_t n);
+/* A geometry or 3D DM waits while a reconstruction is pending (E054). */
+bool pm_reconstruct_hold(uint32_t dm);
+/* Retire, without running, a command whose HWRTData is in the HWR state (Q42). */
+bool hwrt_discard(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
+		  fwaddr_t hwrt_fw, uint32_t cmd_off);

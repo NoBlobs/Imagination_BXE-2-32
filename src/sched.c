@@ -409,8 +409,33 @@ static bool ctx_process(struct ctx_ent *e)
 		if (type & ROGUE_CCB_TYPE_TASK) {
 			uint32_t dm = task_dm(id, e->dm);
 
-			if (dms[dm].busy)
+			if (dms[dm].busy) {
+				/*
+				 * Any higher-priority task waiting for the 3D (a render
+				 * or a 3D transfer) may preempt the running render (Q40).
+				 */
+				if (dm == DM_FRAG)
+					frag_csw_request(e->addr);
+				else if (dm == DM_CDM)
+					cdm_csw_request(e->addr);
 				return progress;
+			}
+			if (dm == DM_FRAG || dm == DM_CDM) {
+				/* a stored context lets the context that preempted it run first */
+				fwaddr_t y = dm == DM_FRAG ? frag_csw_yield_to(e->addr) :
+							     cdm_csw_yield_to(e->addr);
+
+				if (y) {
+					struct ctx_ent *w = ctx_find(y, false);
+
+					if (w && w->pending && !w->dead)
+						return progress;
+					if (dm == DM_FRAG)
+						frag_csw_yield_done();
+					else
+						cdm_csw_yield_done();
+				}
+			}
 			if (!g.forced_idle) {
 				TRACE(SFID_MTS_9, dm, ctx->ccb_fw_addr, type);
 				ctl->dep_offset = roff;
@@ -691,9 +716,15 @@ uint32_t sched_cleanup(uint32_t type, fwaddr_t addr)
 		e->used = false;
 		return 0;
 	}
+	case CLEANUP_ZSBUFFER:
+		if (spm_zsbuffer_cleanup(addr)) {
+			TRACE(SFID_CLEANUP_9, addr, 0u, 0u);
+			return KCCB_RTN_CLEANUP_BUSY;
+		}
+		TRACE(SFID_CLEANUP_8, addr);
+		return 0;
 	case CLEANUP_HWRTDATA:
 	case CLEANUP_FREELIST:
-	case CLEANUP_ZSBUFFER:
 		return kick_resource_busy(type, addr) ? KCCB_RTN_CLEANUP_BUSY : 0;
 	default:
 		return 0;

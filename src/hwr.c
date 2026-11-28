@@ -24,6 +24,8 @@
 #define SOFT_RESET_HWR_HI2          0x00080004u
 
 /* no public names (hardware-recovery.md) */
+/** ``ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME`` (3D, core 0). */
+#define CTX_FLAGS_NEED_RESUME_BIT   0x1u
 #define CR_BIF_STALL                0x1340
 #define CR_BIF_PENDING_A            0x1350
 #define CR_BIF_PENDING_B            0x1338
@@ -190,6 +192,7 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 		if ((busy & (1u << DM_FRAG)) && dms[DM_FRAG].hwrt)
 			hwrts[n++] = dms[DM_FRAG].hwrt;
 		frag_hwr_reset();
+		cdm_hwr_reset();
 		pm_hwr_reconstruct(hwrts, n);
 		dms[DM_GEOM].hwrt = 0;
 		dms[DM_FRAG].hwrt = 0;
@@ -201,6 +204,13 @@ void hwr_recover(uint32_t reason, uint64_t mmu_status, uint64_t req_status)
 		if (!(busy & (1u << d)))
 			continue;
 		TRACE(SFID_HWR_14, d, dms[d].ctx);
+		if (d == DM_FRAG || d == DM_CDM) {
+			/* the retired 3D (Q42 item 2) or compute will not be resumed */
+			struct fwcommoncontext *c = fwptr(dms[d].ctx);
+
+			if (c)
+				c->fw_com_ctx_flags &= ~CTX_FLAGS_NEED_RESUME_BIT;
+		}
 		cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
 		sched_dm_done(d);
 		TRACE(SFID_HWR_25, d);

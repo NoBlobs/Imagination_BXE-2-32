@@ -234,12 +234,125 @@ void dm_start(uint32_t dm, fwaddr_t ctxaddr, uint32_t cmd_off, uint32_t evmask,
  * Returns:
  *     ``true``: the CDM is running.
  */
+/* ---------------------------------------------- CDM context store (CSW) */
+/* scheduler.md "CDM (compute / DM 4) context store and resume" (19b96b7) */
+#define CR_CDM_CTXSW_REQ            0x0488   /* BCAST: CDM_CONTEXT_STORE_START */
+#define CR_CDM_CTXSW_STATUS         0x04A0   /* bit 0: done, bit 1: stored (NEED_RESUME) */
+#define CR_CDM_RESUME               0x0490   /* CDM_CONTEXT_RESUME_START */
+#define CR_CDM_RESUME_STATE         0x04D8   /* the A/B resume state buffer */
+#define CR_CDM_RESUME_PDS1          0x04E0
+#define OS_CTXSWITCH_CDM_EN         (1u << 3) /* ROGUE_FWIF_INICFG_OS_CTXSWITCH_CDM_EN */
+
+/** The compute context switch in progress (as ``csw`` in frag.c). */
+static struct {
+	bool req;
+	fwaddr_t stored, yield_to;
+} cdm_csw;
+
+/** Whether compute may be preempted (``OS_CTXSWITCH_CDM_EN``, or ``EXP_CSW_FORCE``). */
+static bool cdm_csw_enabled(void)
+{
+#ifdef EXP_CSW_FORCE
+	return true;
+#else
+	return g.osdata && (g.osdata->fw_os_config_flags & OS_CTXSWITCH_CDM_EN);
+#endif
+}
+
+/**
+ * Ask the running compute to store its context, for a higher-priority one
+ * (``BCAST[0x0488] = 1``, ``CSW_5``).
+ *
+ * Args:
+ *     new_ctx: Firmware address of the waiting context.
+ */
+void cdm_csw_request(fwaddr_t new_ctx)
+{
+	const struct fwcommoncontext *run = fwptr(dms[DM_CDM].ctx);
+	const struct fwcommoncontext *nc = fwptr(new_ctx);
+
+	if (!cdm_csw_enabled() || cdm_csw.req || !run || !nc || nc->priority <= run->priority)
+		return;
+	TRACE(SFID_CSW_38, DM_CDM, 0u, 0u, run->priority, 0u, 0u, nc->priority, 0u);
+	bcast_write32(CR_CDM_CTXSW_REQ, 1);
+	cdm_csw.req = true;
+	cdm_csw.yield_to = new_ctx;
+	TRACE(SFID_CSW_5);
+}
+
+/**
+ * Finish a compute whose store was requested, at ``COMPUTE_FINISHED``.
+ *
+ * Waits for ``CR[0x04A0]`` bit 0; bit 1 says the kernel was stored. The
+ * context's low flag byte then holds the stored core mask (``CSW_4``,
+ * ``CSW_1``) and the command stays at the head of its queue; otherwise the
+ * flags are cleared and the compute completes normally.
+ *
+ * Args:
+ *     s: The compute data master's state.
+ *
+ * Returns:
+ *     ``true`` when the compute was stored.
+ */
+static bool cdm_csw_end(struct dm_state *s)
+{
+	struct fwcommoncontext *ctx = fwptr(s->ctx);
+	uint32_t stored;
+
+	if (!cdm_csw.req)
+		return false;
+	cdm_csw.req = false;
+	if (!ctx)
+		return false;
+	if (!cr_poll32(CR_CDM_CTXSW_STATUS, 1, 1, 10000))
+		TRACE(SFID_DBG_2, 0xE0560002u);
+	stored = (cr_read32(CR_CDM_CTXSW_STATUS) & 2) ? 1u : 0u;      /* core 0 */
+	ctx->fw_com_ctx_flags = (ctx->fw_com_ctx_flags & ~0xFFu) | stored;
+	if (!stored) {
+		cdm_csw.yield_to = 0;
+		return false;
+	}
+	TRACE(SFID_CSW_4);
+	TRACE(SFID_CSW_1, s->ctx);
+	cdm_csw.stored = s->ctx;
+	s->keep = true;         /* the CDM command stays at the head: it is resumed later */
+	return true;
+}
+
+/**
+ * The context a stored compute context must let run first.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of a context about to kick a compute.
+ *
+ * Returns:
+ *     The higher-priority context it yields to, or 0.
+ */
+fwaddr_t cdm_csw_yield_to(fwaddr_t ctxaddr)
+{
+	return cdm_csw.stored == ctxaddr ? cdm_csw.yield_to : 0;
+}
+
+/** Stop yielding the compute data master. */
+void cdm_csw_yield_done(void)
+{
+	cdm_csw.stored = 0;
+	cdm_csw.yield_to = 0;
+}
+
+/** Forget a compute context switch (after a hardware recovery). */
+void cdm_hwr_reset(void)
+{
+	cdm_csw.req = false;
+	cdm_csw_yield_done();
+}
+
 static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		     const struct ccb_cmd_header *hdr, const struct cmd_compute *cmd,
 		     uint32_t cmd_off)
 {
 	struct fwcomputecontext *cctx = (struct fwcomputecontext *)ctx;
-	uint32_t slot;
+	uint32_t slot, resume;
 
 	(void)cr_read32(CR_MULTICORE_SYSTEM);
 	bcast_write32(CR_MULTICORE_COMPUTE_CTRL, (cmd->execute_count << 8) | 1);
@@ -259,12 +372,37 @@ static bool kick_cdm(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write64(CR_CDM_TERMINATE_PDS, cctx->ctxswitch_regs.cdm_terminate_pds);
 	bcast_write32(CR_CDM_TERMINATE_PDS1, (uint32_t)cctx->ctxswitch_regs.cdm_terminate_pds1);
 
+	if (ctxaddr == cdm_csw.yield_to)
+		cdm_csw_yield_done();   /* the higher-priority compute runs now */
+	/*
+	 * Resume of a stored kernel (scheduler.md, CDM item 3): the A/B resume
+	 * state selected by rogue_fwif_compute_ctx_state.ctx_state_flags bit 0,
+	 * the command's resume PDS, an MMU cache invalidation, and the resume
+	 * trigger instead of 0x0478.
+	 */
+	resume = ctx->fw_com_ctx_flags & 0xFFu;
+	if (resume) {
+		const uint32_t *st = fwptr(ctx->context_state_addr);
+		uint64_t buf = (st && (hw_rd32(st, 0) & 1)) ? cctx->ctxswitch_regs.cdm_resume_pds0_b :
+							     cctx->ctxswitch_regs.cdm_resume_pds0;
+
+		TRACE(SFID_CSW_2, ctxaddr, (uint32_t)(buf >> 32), (uint32_t)buf);
+		cr_write64(CR_CDM_RESUME_STATE, buf);
+		cr_write32(CR_CDM_RESUME_PDS1, cmd->regs.cdm_resume_pds1);
+		cr_write32(CR_BIF_CTRL_INVAL, 0x1C);
+	}
+
 	cr_write32(CR_EVENT_CLEAR, EV_COMPUTE_FINISHED);
 	dm_start(DM_CDM, ctxaddr, cmd_off, EV_COMPUTE_FINISHED, SFID_MAIN_6, slot);
 	(void)cr_read32(CR_CORE_REVISION);
 
 	g.cdm_kicks++;
-	bcast_write32(CR_CDM_RUN, 1);   /* trigger: last write */
+	if (resume) {
+		cr_write32(CR_CDM_RESUME, 1);   /* trigger: last write */
+		ctx->fw_com_ctx_flags &= ~0xFFu;
+	} else {
+		bcast_write32(CR_CDM_RUN, 1);   /* trigger: last write */
+	}
 	return true;
 }
 
@@ -519,6 +657,13 @@ bool kick_task(uint32_t dm, fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	kick_defer = false;
 	uint32_t id = hdr->cmd_type & 0x7FFF;
 
+	/* after an HWR, the host is still rebuilding the free lists (E054) */
+	if ((id == CCB_CMD_GEOM || id == CCB_CMD_FRAG || id == CCB_CMD_FRAG_PR) &&
+	    pm_reconstruct_hold(dm)) {
+		kick_defer = true;
+		return false;
+	}
+
 	switch (id) {
 	case CCB_CMD_CDM:
 		return kick_cdm(ctxaddr, ctx, hdr, payload, cmd_off);
@@ -678,6 +823,16 @@ void kick_events(uint32_t ev)
 		if (!s->busy || !(ev & s->event_mask))
 			continue;
 		cr_write32(CR_EVENT_CLEAR, s->event_mask);
+		/*
+		 * A 3D context store (no layer loop, no PM_3D_MEM_FREE, no retire,
+		 * Q40) or a compute context store (no retire): flush and release.
+		 */
+		if ((d == DM_FRAG && frag_csw_end(s, ev)) || (d == DM_CDM && cdm_csw_end(s))) {
+			dm_cache_flush(d);
+			cr_write32(CR_SCRATCH15, cr_read32(CR_SCRATCH15) & ~(1u << d));
+			sched_dm_done(d);
+			continue;
+		}
 		/* render-target array: next layer, before the flush and the retire */
 		if (d == DM_FRAG && frag_rta_next(s))
 			continue;

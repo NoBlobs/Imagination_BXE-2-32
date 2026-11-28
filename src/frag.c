@@ -45,7 +45,6 @@
 #define COMMON_SCREEN_PIXEL_MAX  0x04
 #define COMMON_MSCTL             0x08
 #define COMMON_MSCTL_FLIPPED     0x10
-#define COMMON_MTILE_STRIDE      0x24
 #define COMMON_RGN_HEADER_SIZE   0x4C     /* region headers per layer */
 #define COMMON_ISP_MTILE_SIZE    0x50
 
@@ -160,16 +159,31 @@ static struct {
 static struct {
 	bool pr;                /* this render is a FRAG_PR */
 	bool prior_pr;          /* hwrtdata.flags & 8 at the kick */
+	bool zs_unbacked;       /* FRAG_PR whose on-demand ZS buffer is not backed (Q41) */
 	uint32_t *npr;          /* rta_num_partial_renders[], or NULL */
 	uint32_t flags, isp_ctl, bgobjvals, bgobjdepth;
 	uint64_t zlsctl, bg[3], bg_pr[3];
 } ks;
 
-/** Forget a running partial render and layer loop (after a hardware recovery). */
+/**
+ * The 3D context switch in progress: a store was requested, and the stored
+ * context yields the 3D to ``yield_to`` until that context has kicked.
+ */
+static struct {
+	bool req;
+	fwaddr_t stored, yield_to;
+} csw;
+
+static bool frag_csw_resume(fwaddr_t ctxaddr, const struct fwcommoncontext *ctx);
+
+/** Forget a running partial render, layer loop and 3D context switch (after a hardware recovery). */
 void frag_hwr_reset(void)
 {
 	frag_is_pr = false;
 	rta.on = false;
+	csw.req = false;
+	csw.stored = 0;
+	csw.yield_to = 0;
 }
 
 /**
@@ -199,7 +213,7 @@ static void frag_layer_state(uint32_t layer)
 	const uint64_t *bg = has_pr ? ks.bg_pr : ks.bg;
 	uint32_t v06d0 = 0x1F;
 
-	if (ks.pr) {            /* forced Z/S store on every FRAG_PR */
+	if (ks.pr && !ks.zs_unbacked) { /* forced Z/S store on every FRAG_PR */
 		if (ks.flags & FRAG_FLAGS_DEPTH)
 			zlo |= 0x80004u;
 		if (ks.flags & FRAG_FLAGS_STENCIL)
@@ -208,9 +222,9 @@ static void frag_layer_state(uint32_t layer)
 			v06d0 = 0x3F;
 	}
 	if (has_pr) {           /* 2nd+ FRAG_PR and the final render: load what was stored */
-		if (ks.flags & FRAG_FLAGS_DEPTH)
+		if ((ks.flags & FRAG_FLAGS_DEPTH) && !(ks.pr && ks.zs_unbacked))
 			zlo |= 0x8002u;
-		if (ks.flags & FRAG_FLAGS_STENCIL)
+		if ((ks.flags & FRAG_FLAGS_STENCIL) && !(ks.pr && ks.zs_unbacked))
 			zlo |= 0x4002u;
 		vals |= 0x200u;
 		if (!(ks.flags & FRAG_FLAGS_100000) &&
@@ -484,8 +498,12 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	uint8_t *hwrt = fwptr(hwrt_fw);
 	const uint8_t *common = hwrt ? fwptr(rd32(hwrt, HWRT_COMMON_FW_ADDR)) : NULL;
 	uint32_t slot, isp_ctl, tif, layer;
+	bool resume;
 
 	if (!hwrt || !common || !hwrt_freelist(hwrt, PM_FL_LOCAL))
+		return false;
+	/* its geometry was discarded by an HWR: retire without touching the GPU (Q42) */
+	if (hwrt_discard(DM_FRAG, ctxaddr, ctx, hwrt_fw, cmd_off))
 		return false;
 
 	/* A. preconditions */
@@ -507,7 +525,7 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	bcast_write32(CR_FRAG_SCREEN, rd32(common, COMMON_SCREEN_PIXEL_MAX));
 	/* isp_mtile_size; mtile_stride in both halves breaks every render (E039) */
 	bcast_write32(CR_ISP_MTILE_SIZE, rd32(common, COMMON_ISP_MTILE_SIZE));
-	bcast_write32(CR_ISP_RGN, 4 * rd32(common, COMMON_MTILE_STRIDE));   /* Q16l */
+	bcast_write32(CR_ISP_RGN, rd32(common, COMMON_RGN_HEADER_SIZE));   /* 19b96b7: rgn_header_size */
 
 	/*
 	 * C. ZS bases (the command's, also in a partial render: Q30), background,
@@ -515,6 +533,7 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	 * written with the first layer (frag_layer_state).
 	 */
 	ks.pr = partial;
+	ks.zs_unbacked = partial && spm_pr_zs_unbacked();
 	ks.prior_pr = rd32(hwrt, HWRT_FLAGS) & HWRT_FLAGS_PRIOR_PR;
 	ks.npr = fwptr(rd32(hwrt, HWRT_RTA_NUM_PR));
 	ks.flags = rd32(cmd, FRAG_FLAGS);
@@ -557,8 +576,6 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 		bcast_write64(CR_PBE_WORDS + 8 * n, rd64(r, FR_PBE_WORD + 24 * n));
 		bcast_write64(CR_PBE_WORDS + 0x40 + 8 * n, rd64(r, FR_PBE_WORD + 24 * n + 8));
 	}
-	bcast_write32(CR_3D_0298, 0);
-	bcast_write32(CR_3D_01C8, 0);
 	cr_write32(CR_PM_PR_CTRL, partial ? 1 : 0);
 	/*
 	 * render-target arrays: the first layer's registers, for a render and
@@ -566,9 +583,11 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	 */
 	layer = rta_setup(cmd, r, hwrt, common);
 	frag_layer_state(layer);
+	/* 0x0298 / 0x01C8, and the resume of a stored render (Q40) */
+	resume = frag_csw_resume(ctxaddr, ctx);
 
 	/* E. trace and state, F. trigger */
-	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, hwrt_fw, partial ? 1u : 0u, 0u, ctx->pid,
+	TRACE(SFID_MAIN_120, ctxaddr, cmd_off, hwrt_fw, partial ? 1u : 0u, resume ? 1u : 0u, ctx->pid,
 	      ctx->priority, rd32(cmd, 0), hdr->ext_job_ref, hdr->int_job_ref);
 	if (!partial)
 		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_KICK_FRAG);
@@ -579,7 +598,200 @@ bool kick_frag(fwaddr_t ctxaddr, struct fwcommoncontext *ctx,
 	dm_start(DM_FRAG, ctxaddr, cmd_off, EV_PIXELBE_END_RENDER, SFID_MAIN_4, slot);
 	dms[DM_FRAG].hwrt = hwrt_fw;
 	bcast_write32(CR_PIXEL_LAUNCH, 1);              /* last write */
+	if (resume)
+		ctx->fw_com_ctx_flags &= ~0xFFu;        /* resumed (Q40 item 3) */
 	cr_write32(CR_MTS_SCHEDULE, 0);
+	return true;
+}
+
+/* ------------------------------------------------ 3D context store (Q40) */
+/* rogue_fwif_frag_ctx_state (public), the render context's 3D state buffer */
+#define FCS_PM_DEALLOC_MASK      0x00     /* frag_reg_pm_deallocated_mask_status */
+#define FCS_PDS_MTILEFREE        0x04     /* frag_reg_dm_pds_mtilefree_status */
+#define FCS_ISP_STORE            0x0C     /* frag_reg_isp_store[core] */
+/* registers of the store and resume protocol (scheduler.md, answer to Q40) */
+#define CR_ISP_CTXSW_REQ         0x1000   /* BCAST: 1 = store the running 3D */
+#define CR_ISP_STORE0            0x1008   /* per core: the stored ISP position */
+#define CR_ISP_RESUME0           0x1020   /* per core: the position to resume from */
+#define CR_ISP_CTXSW_STATUS      0x1038   /* bit 0: the render finished before storing */
+#define CR_PM_3D_STORE_STATUS    0x03F8   /* 0xC2 when the PM 3D store is idle */
+#define CR_PM_DEALLOC_MASK       0x0360
+#define CR_PDS_MTILEFREE         0x0370
+#define ISP_RENDER_RESUME        0x10u
+#define EV_ISP_STORED            0x8u     /* CR_EVENT_STATUS bit seen with a store */
+#define CTX_FLAGS_NEED_RESUME    0x1u     /* ROGUE_FWIF_CONTEXT_FLAGS_NEED_RESUME (core 0) */
+#define OS_CTXSWITCH_FRAG_EN     (1u << 2) /* ROGUE_FWIF_INICFG_OS_CTXSWITCH_FRAG_EN */
+
+/**
+ * Whether the 3D may be preempted: the host enables it with
+ * ``ROGUE_FWIF_INICFG_OS_CTXSWITCH_FRAG_EN`` in ``osdata.fw_os_config_flags``
+ * (the mainline host leaves it at 0). ``EXP_CSW_FORCE`` enables it for tests.
+ */
+static bool csw_enabled(void)
+{
+#ifdef EXP_CSW_FORCE
+	return true;
+#else
+	return g.osdata && (g.osdata->fw_os_config_flags & OS_CTXSWITCH_FRAG_EN);
+#endif
+}
+
+/**
+ * Ask the running 3D to store its context, for a higher-priority 3D.
+ *
+ * Called by the scheduler when a context's task (a ``FRAG``, ``FRAG_PR`` or
+ * ``TQ_3D``) waits for the busy 3D (``scheduler.md`` "Preemption"). The store is requested
+ * with ``BCAST[0x1000] = 1``, only while ``(ISP_RENDER & 3) != 3`` and not
+ * during a partial render (answer to Q40). A render-target-array render with
+ * layers left is not stored: the resume of a layer loop is not specified.
+ *
+ * Args:
+ *     new_ctx: Firmware address of the waiting context.
+ */
+void frag_csw_request(fwaddr_t new_ctx)
+{
+	const struct fwcommoncontext *run = fwptr(dms[DM_FRAG].ctx);
+	const struct fwcommoncontext *nc = fwptr(new_ctx);
+
+	if (!csw_enabled() || csw.req || frag_is_pr || rta.on || !dms[DM_FRAG].hwrt ||
+	    !run || !nc || nc->priority <= run->priority)
+		return;
+	TRACE(SFID_CSW_38, DM_FRAG, 0u, 0u, run->priority, 0u, 0u, nc->priority, 0u);
+	if ((cr_read32(CR_ISP_RENDER) & 3) == 3)
+		return;         /* too late: the render is finishing */
+	bcast_write32(CR_ISP_CTXSW_REQ, 1);
+	csw.req = true;
+	csw.yield_to = new_ctx;
+	TRACE(SFID_CSW_11);
+}
+
+/**
+ * Finish a 3D whose store was requested, at ``PIXELBE_END_RENDER``.
+ *
+ * Answer to Q40, items 1, 2 and 4. The render was stored when
+ * ``CR_EVENT_STATUS`` bit 3 is set and ``CR[0x1038]`` bit 0 is clear;
+ * with ``CR[0x1038]`` bit 0 set it finished normally, the saved
+ * deallocation state is zeroed and the normal completion follows.
+ *
+ * A stored render saves the ISP position and, once the PM 3D store is idle
+ * (``CR[0x03F8] & 0xC2``), the PM deallocation state into the context's
+ * ``rogue_fwif_frag_ctx_state``; the context needs resume (``CSW_7``). The
+ * HWRTData becomes ``3DCONTEXTSTORED``, the PM MMU is invalidated, and the
+ * command stays at the head of its queue (``keep``). The caller flushes the
+ * 3D caches and releases the data master; ``PM_3D_MEM_FREE``, the layer loop
+ * and the retire are skipped.
+ *
+ * Args:
+ *     s: The fragment data master's state.
+ *     ev: The ``CR_EVENT_STATUS`` bits that ended the render (the caller
+ *         has already cleared them in the register).
+ *
+ * Returns:
+ *     ``true`` when the render was stored.
+ */
+bool frag_csw_end(struct dm_state *s, uint32_t ev)
+{
+	struct fwcommoncontext *ctx = fwptr(s->ctx);
+	uint8_t *fcs;
+	uint8_t *hwrt = fwptr(s->hwrt);
+	uint32_t sw;
+
+	if (!csw.req)
+		return false;
+	csw.req = false;
+	if (!ctx)
+		return false;
+	ctx->fw_com_ctx_flags &= ~0xFFu;
+	fcs = fwptr(ctx->context_state_addr);
+	ev |= cr_read32(CR_EVENT_STATUS);       /* the caller already cleared bit 3 */
+	sw = cr_read32(CR_ISP_CTXSW_STATUS);
+	TRACE(SFID_CSW_10, ev, sw, cr_read32(CR_ISP_STORE0));
+	if (!(ev & EV_ISP_STORED) || (sw & 1)) {
+		/* the request came too late: a normal end */
+		if (fcs) {
+			hw_wr32(fcs, FCS_PM_DEALLOC_MASK, 0);
+			hw_wr32(fcs, FCS_PDS_MTILEFREE, 0);
+		}
+		csw.yield_to = 0;
+		return false;
+	}
+	if (fcs)
+		hw_wr32(fcs, FCS_ISP_STORE, cr_read32(CR_ISP_STORE0));
+	if (!cr_poll32(CR_PM_3D_STORE_STATUS, 0xC2u, 0xC2u, 10000)) {
+		bcast_write32(CR_EVENT_CLEAR, 0x4108u);
+		TRACE(SFID_DBG_2, 0xE0560001u);
+	}
+	if (fcs) {
+		hw_wr32(fcs, FCS_PM_DEALLOC_MASK, cr_read32(CR_PM_DEALLOC_MASK));
+		hw_wr32(fcs, FCS_PDS_MTILEFREE, cr_read32(CR_PDS_MTILEFREE));
+	}
+	ctx->fw_com_ctx_flags |= CTX_FLAGS_NEED_RESUME;
+	TRACE(SFID_CSW_9);
+	TRACE(SFID_CSW_7, s->ctx);
+	if (hwrt) {
+		hw_wr32(hwrt, HWRT_STATE, RTDATA_STATE_FRAG_CONTEXT_STORED);
+		TRACE(SFID_MAIN_2, RTDATA_STATE_FRAG_CONTEXT_STORED, 0u);
+	}
+	pm_mmu_inval();
+	bcast_write32(CR_EVENT_CLEAR, (ev & 0x4000u) ? 0x4008u : 0x8u);
+	csw.stored = s->ctx;
+	s->keep = true;         /* the FRAG stays at the head: it is resumed later */
+	s->hwrt = 0;
+	return true;
+}
+
+/**
+ * The context a stored 3D context must let run first.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of a context about to kick its 3D.
+ *
+ * Returns:
+ *     The higher-priority context it yields to, or 0.
+ */
+fwaddr_t frag_csw_yield_to(fwaddr_t ctxaddr)
+{
+	return csw.stored == ctxaddr ? csw.yield_to : 0;
+}
+
+/** Stop yielding: the higher-priority 3D ran, or no longer waits. */
+void frag_csw_yield_done(void)
+{
+	csw.stored = 0;
+	csw.yield_to = 0;
+}
+
+/**
+ * Resume writes of a 3D kick (answer to Q40, item 3), after the layer state
+ * and before the pixel launch.
+ *
+ * A normal kick zeroes ``0x0298`` and ``0x01C8``. A kick of a stored context
+ * gives the ISP its stored position (``CR[0x1020]``), sets ``ISP_RENDER``
+ * bit 4 and restores the PM deallocation state.
+ *
+ * Args:
+ *     ctxaddr: Firmware address of the context.
+ *     ctx: The context.
+ *
+ * Returns:
+ *     ``true`` when the kick resumes a stored render.
+ */
+static bool frag_csw_resume(fwaddr_t ctxaddr, const struct fwcommoncontext *ctx)
+{
+	const uint8_t *fcs = fwptr(ctx->context_state_addr);
+
+	if (ctxaddr == csw.yield_to)
+		frag_csw_yield_done();  /* the higher-priority 3D runs now */
+	if (!(ctx->fw_com_ctx_flags & 0xFFu) || !fcs) {
+		bcast_write32(CR_3D_0298, 0);
+		bcast_write32(CR_3D_01C8, 0);
+		return false;
+	}
+	TRACE(SFID_CSW_8, ctxaddr);
+	cr_write32(CR_ISP_RESUME0, hw_rd32(fcs, FCS_ISP_STORE));
+	bcast_write32(CR_ISP_RENDER, cr_read32(CR_ISP_RENDER) | ISP_RENDER_RESUME);
+	cr_write32(CR_3D_0298, hw_rd32(fcs, FCS_PM_DEALLOC_MASK));
+	cr_write32(CR_3D_01C8, hw_rd32(fcs, FCS_PDS_MTILEFREE));
 	return true;
 }
 

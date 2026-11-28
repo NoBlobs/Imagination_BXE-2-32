@@ -216,6 +216,10 @@ struct kccb_cmd {                        /* rogue_fwif_kccb_cmd, 0x58 bytes */
 		struct { uint32_t pow_type; uint32_t data; } pow;
 		struct { fwaddr_t context_fw_addr; uint32_t ccb_fence_offset; } force_update;
 		struct { fwaddr_t freelist_fw_addr; uint32_t delta_pages; uint32_t new_pages; uint32_t ready_pages; } grow;
+		/** ``rogue_fwif_zsbuffer_backing_data``: the buffer, and whether the host succeeded. */
+		struct { fwaddr_t zs_buffer_fw_addr; uint32_t done; } zsbuffer;
+		/** ``rogue_fwif_freelists_reconstruction_data``: the rebuilt free lists. */
+		struct { uint32_t freelist_count; uint32_t freelist_ids[18]; } reconstruct;
 		struct { uint32_t new_clock_speed; } coreclk;
 		struct { uint32_t config_flags; uint32_t op; } stateflags;
 		struct {                 /* rogue_fwif_slcflushinvaldata (32 bytes) */
